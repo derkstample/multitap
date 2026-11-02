@@ -116,6 +116,7 @@ Core::Core(const std::string &core_path, const std::string &system_dir,
       overrides_(std::move(option_overrides)) {
   if (g_core) throw CoreError("Only one core per process");
   api_ = new Api(core_path);
+  hw_ = std::make_unique<HwRender>();
   g_core = this;
   api_->retro_set_environment(env_cb);
   api_->retro_set_video_refresh(video_cb);
@@ -150,14 +151,21 @@ void Core::load_game(const std::string &content_path) {
     game.size = game_data_.size();
   }
   if (!api_->retro_load_game(&game)) {
-    if (hw_render_requested_)
+    if (hw_render_requested_ && !hw_->requested())
       throw CoreError(
-          "This core needs hardware (OpenGL/Vulkan) rendering, which MultiTap v1 does not "
-          "support");
+          "This core needs Vulkan or Direct3D rendering, which MultiTap does not support");
     throw CoreError("The core rejected this file");
   }
   loaded_ = true;
   api_->retro_get_system_av_info(&av_);
+  if (hw_->requested()) {
+    try {
+      const auto &g = av_.geometry;
+      hw_->start(std::max(g.max_width, g.base_width), std::max(g.max_height, g.base_height));
+    } catch (const std::exception &e) {
+      throw CoreError(std::string("This core renders with OpenGL: ") + e.what());
+    }
+  }
   api_->retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
 }
 
@@ -165,6 +173,7 @@ void Core::run() { api_->retro_run(); }
 void Core::reset() { api_->retro_reset(); }
 
 void Core::close() {
+  hw_->notify_destroy();  // before unload, as in RetroArch; GL stays usable until release()
   if (loaded_) {
     api_->retro_unload_game();
     loaded_ = false;
@@ -173,6 +182,7 @@ void Core::close() {
     api_->retro_deinit();
     initialised_ = false;
   }
+  hw_->release();
 }
 
 double Core::fps() const { return av_.timing.fps > 1 ? av_.timing.fps : 60.0; }
@@ -193,7 +203,10 @@ std::span<uint8_t> Core::sram() {
 // ---- callbacks -------------------------------------------------------------------------
 
 void Core::video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
-  if (data == RETRO_HW_FRAME_BUFFER_VALID) data = nullptr;
+  if (data == RETRO_HW_FRAME_BUFFER_VALID) {
+    data = g_core->hw_->read_frame(w, h);
+    pitch = size_t(w) * 4;
+  }
   if (g_core->hooks_.video) g_core->hooks_.video(data, w, h, pitch);
 }
 
@@ -343,14 +356,20 @@ bool Core::handle_env(unsigned cmd, void *data) {
       return true;  // nothing shows core options yet
 
     case RETRO_ENVIRONMENT_SET_HW_RENDER:
-      hw_render_requested_ = true;  // accepted in phase 5
-      return false;
+      hw_render_requested_ = true;
+      return hw_->accept(static_cast<retro_hw_render_callback *>(data));
+    case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER:
+      if (!HwRender::supported()) return false;
+      *static_cast<unsigned *>(data) = RETRO_HW_CONTEXT_OPENGL_CORE;
+      return true;
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
       av_ = *static_cast<const retro_system_av_info *>(data);
+      hw_->ensure_size(av_.geometry.max_width, av_.geometry.max_height);
       if (hooks_.av_changed) hooks_.av_changed();
       return true;
     case RETRO_ENVIRONMENT_SET_GEOMETRY:
       av_.geometry = *static_cast<const retro_game_geometry *>(data);
+      hw_->ensure_size(av_.geometry.base_width, av_.geometry.base_height);
       if (hooks_.av_changed) hooks_.av_changed();
       return true;
     case RETRO_ENVIRONMENT_GET_LANGUAGE:
@@ -386,7 +405,7 @@ bool Core::handle_env(unsigned cmd, void *data) {
     case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO:
     case RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO:
     case RETRO_ENVIRONMENT_SET_MEMORY_MAPS:
-    case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS:
+    case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS:  // also SET_HW_SHARED_CONTEXT (44, masked)
     case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:
     case RETRO_ENVIRONMENT_SET_CONTENT_INFO_OVERRIDE:
       return true;

@@ -18,6 +18,17 @@ def testcore(tmp_path_factory) -> Path:
     return out
 
 
+@pytest.fixture(scope="session")
+def testcore_gl(tmp_path_factory) -> Path:
+    """The OpenGL variant of the test core (needs no GL headers or libraries to build)."""
+    if not shutil.which("gcc"):
+        pytest.skip("gcc not available")
+    out = tmp_path_factory.mktemp("core") / "testcore_gl_libretro.so"
+    subprocess.run(["gcc", "-O2", "-shared", "-fPIC", "-o", str(out),
+                    str(FIXTURES / "testcore_gl.c")], check=True)
+    return out
+
+
 @pytest.fixture
 def xdg(tmp_path, monkeypatch) -> Path:
     """Point MultiTap's config/data dirs at a temp folder."""

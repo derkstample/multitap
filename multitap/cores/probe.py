@@ -1,4 +1,4 @@
-"""Out-of-process core probing.
+"""Out-of-process core probing (the Python fallback for multitap-worker --probe).
 
     python -m multitap.cores.probe info  <core.so>
     python -m multitap.cores.probe trial <core.so> <rom> <system_dir>
@@ -18,6 +18,16 @@ TRIAL_FRAMES = 10
 
 
 def probe_argv(*args: str) -> list[str]:
+    """The native worker's probe when it is built (it can also host OpenGL cores), else this
+    module. Both print the same JSON."""
+    from .. import native
+    worker = native.find("multitap-worker")
+    if worker and os.environ.get("MULTITAP_PYTHON_SESSION") != "1":
+        return [str(worker), "--probe", *args]
+    return python_probe_argv(*args)
+
+
+def python_probe_argv(*args: str) -> list[str]:
     return [sys.executable, "-m", "multitap.cores.probe", *args]
 
 

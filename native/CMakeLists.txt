@@ -38,10 +38,21 @@ endif()
 add_executable(multitap-worker
   worker/main.cpp
   worker/core.cpp
-  worker/content.cpp)
+  worker/content.cpp
+  worker/hwrender.cpp)
 target_compile_options(multitap-worker PRIVATE -Wall -Wextra)
 target_link_libraries(multitap-worker PRIVATE
   libretro_api multitap_common PkgConfig::LIBARCHIVE ${CMAKE_DL_LIBS})
+# OpenGL cores render into an offscreen EGL context. Without EGL they are refused.
+pkg_check_modules(EGL IMPORTED_TARGET egl)
+find_path(GLCOREARB_DIR GL/glcorearb.h)
+if(EGL_FOUND AND GLCOREARB_DIR)
+  target_compile_definitions(multitap-worker PRIVATE MULTITAP_HAVE_EGL)
+  target_include_directories(multitap-worker PRIVATE ${GLCOREARB_DIR})
+  target_link_libraries(multitap-worker PRIVATE PkgConfig::EGL)
+else()
+  message(WARNING "EGL development files not found: multitap-worker can't run OpenGL cores")
+endif()
 install(TARGETS multitap-worker RUNTIME DESTINATION bin)
 
 # ---- multitap-session: the in-game window (SDL2 + OpenGL 3.3, Dear ImGui OSD) ------------

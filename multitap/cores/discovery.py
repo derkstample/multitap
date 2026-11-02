@@ -53,7 +53,8 @@ class CoreInfo:
     source: str = "custom"
     need_fullpath: bool = False
     block_extract: bool = False
-    hw_render: bool = False
+    hw_render: bool = False  # needs a GPU API (see hw_api)
+    hw_api: str = ""  # the .info file's required_hw_api, e.g. "OpenGL Core >= 3.3 | Vulkan >= 1.0"
     error: str = ""
 
     @property
@@ -97,7 +98,15 @@ def info_to_fields(info: dict[str, str]) -> dict:
         "extensions": exts,
         "firmware": firmware,
         "hw_render": bool(hw) and "software" not in hw.lower(),
+        "hw_api": hw,
     }
+
+
+def can_host(hw_api: str) -> bool:
+    """Whether MultiTap can run a core needing `hw_api`: OpenGL and OpenGL ES, through the
+    native worker. Vulkan- or Direct3D-only cores can't run."""
+    from .. import native
+    return "opengl" in hw_api.lower() and native.find("multitap-worker") is not None
 
 
 def _find_info(core_id: str) -> dict[str, str] | None:
@@ -175,10 +184,15 @@ def describe(core_path: str | Path, source: str = "custom", cache: dict | None =
         core.systems = f["systems"]
         core.firmware = f["firmware"]
         core.hw_render = f["hw_render"]
+        core.hw_api = f["hw_api"]
         if not core.extensions:
             core.extensions = f["extensions"]
-    if core.hw_render and not core.error:
-        core.error = "Needs hardware rendering (not supported in v1)"
+    if core.hw_render and not core.error and not can_host(core.hw_api):
+        if "opengl" in core.hw_api.lower():
+            core.error = "Needs OpenGL rendering: build the native runtime (pip install -e .)"
+        else:
+            api = core.hw_api.split("|")[0].split(">")[0].strip()  # "Vulkan >= 1.0" -> Vulkan
+            core.error = f"Needs {api} rendering, which MultiTap doesn't support"
     return core
 
 

@@ -1,5 +1,6 @@
-// A software-rendering libretro core wrapper (one core per process), ported from
-// multitap/libretro/core.py.
+// A libretro core wrapper (one core per process), ported from multitap/libretro/core.py.
+// OpenGL cores render into an offscreen EGL context (hwrender.hpp); their frames reach the video
+// hook as XRGB8888 like any software frame.
 #pragma once
 
 #include <libretro.h>
@@ -7,10 +8,13 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "hwrender.hpp"
 
 namespace mt {
 
@@ -54,8 +58,12 @@ class Core {
   double fps() const;
   double sample_rate() const { return av_.timing.sample_rate; }
   double aspect() const;
-  unsigned pixel_format() const { return pixel_format_; }
+  unsigned pixel_format() const {
+    return hw_->active() ? unsigned(RETRO_PIXEL_FORMAT_XRGB8888) : pixel_format_;
+  }
   bool hw_render_requested() const { return hw_render_requested_; }
+  // "OpenGL 4.6 (renderer)" for hardware-rendered cores, else empty.
+  std::string hw_description() const { return hw_->active() ? hw_->description() : ""; }
   bool shutdown_requested() const { return shutdown_requested_; }
   const std::map<std::string, std::string> &options() const { return option_values_; }
 
@@ -94,6 +102,7 @@ class Core {
   void define_options(const Def *defs);
 
   Api *api_;
+  std::unique_ptr<HwRender> hw_;
   SystemInfo info_;
   Hooks hooks_;
   retro_system_av_info av_{};

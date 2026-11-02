@@ -24,6 +24,17 @@ def test_parse_info():
     assert discovery.info_to_fields({"required_hw_api": "OpenGL Core >= 3.3"})["hw_render"]
 
 
+def test_gl_cores_are_usable_and_vulkan_only_cores_are_not(xdg, testcore, monkeypatch):
+    from multitap import native
+    monkeypatch.setattr(discovery, "_find_info", lambda cid: {"required_hw_api": api})
+    for api, usable in [("OpenGL Core >= 3.3", True), ("OpenGL >= 2.0 | Vulkan >= 1.0", True),
+                        ("OpenGL ES >= 3.0", True), ("Vulkan >= 1.1", False)]:
+        core = discovery.describe(testcore, cache={})
+        assert core.hw_render and core.hw_api == api
+        assert (not core.error) == (usable and native.find("multitap-worker") is not None), api
+    assert core.error == "Needs Vulkan rendering, which MultiTap doesn't support"
+
+
 def test_core_id():
     assert discovery.core_id_for("/x/genesis_plus_gx_libretro.so") == "genesis_plus_gx"
 

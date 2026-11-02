@@ -9,7 +9,7 @@
 //
 // Control: line-delimited JSON objects with a "type" field over --control-fd (a socketpair).
 //   session -> worker: start{t0_ns}  pause  resume{t0_ns}  reset  quit  audible{audible: bool}
-//   worker -> session: loaded{name, fps, aspect, sample_rate, geometry, shm}
+//   worker -> session: loaded{name, fps, aspect, sample_rate, geometry, shm, hw_render}
 //                      error{message}  log{message}  stats{frame_ms, fps}  exited
 // t0_ns is CLOCK_MONOTONIC; it defaults to "now". After `loaded` the worker waits for `start`,
 // then runs frame n at t0 + n / fps. Shared memory (see common/shm.hpp) is created before
@@ -169,6 +169,7 @@ class Worker {
     std::string content =
         mt::prepare_content(a_.rom, info.valid_extensions, tmp_.path, info.block_extract);
     core_->load_game(content);
+    if (std::string hw = core_->hw_description(); !hw.empty()) log("Rendering with " + hw);
 
     sram_path_ = (fs::path(a_.save_dir) / (mt::stem_of(a_.rom) + ".srm")).string();
     if (auto sram = core_->sram(); !sram.empty() && fs::is_regular_file(sram_path_)) {
@@ -189,7 +190,8 @@ class Worker {
                {"geometry",
                 {{"base_width", g.base_width}, {"base_height", g.base_height},
                  {"max_width", g.max_width}, {"max_height", g.max_height}}},
-               {"shm", a_.shm_prefix}});
+               {"shm", a_.shm_prefix},
+               {"hw_render", core_->hw_description()}});
   }
 
   void create_shm() {

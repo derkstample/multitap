@@ -7,11 +7,11 @@ a libretro core, and every player's core runs in a separate process.
 ## Setup
 
 Build requirements: a C++20 compiler (GCC 11+ or Clang 14+), CMake 3.24+ (pip fetches one if
-the system has none), pkg-config, and the libarchive, SDL2 and OpenGL development headers. On
-Debian/Ubuntu:
+the system has none), pkg-config, and the libarchive, SDL2, OpenGL and EGL development headers.
+On Debian/Ubuntu:
 
 ```bash
-sudo apt install build-essential cmake pkg-config libsdl2-dev libarchive-dev libgl-dev
+sudo apt install build-essential cmake pkg-config libsdl2-dev libarchive-dev libgl-dev libegl-dev
 ```
 
 Optional: [librashader](https://github.com/SnowflakePowered/librashader) (`librashader.so` on the
@@ -35,8 +35,10 @@ Cores are found automatically in:
 - RetroArch's core folders, including flatpak RetroArch
 - MultiTap's own folder, which **Get cores…** downloads into from buildbot.libretro.com
 
-**Browse…** adds any `*_libretro.so` from disk. v1 supports software-rendered cores (NES, SNES,
-Mega Drive, GB/GBC/GBA, PC Engine, …). OpenGL-only cores are listed but greyed out.
+**Browse…** adds any `*_libretro.so` from disk. Software-rendered cores (NES, SNES, Mega Drive,
+GB/GBC/GBA, PC Engine, …) and OpenGL / OpenGL ES cores (N64, Dreamcast, PSP, …) both work: each
+player's GL core renders offscreen on the GPU through EGL. Cores that only support Vulkan or
+Direct3D are listed but greyed out.
 
 ## Launcher
 

@@ -10,7 +10,7 @@ import zipfile
 import pytest
 
 from multitap import native
-from multitap.cores.probe import probe_argv, probe_env
+from multitap.cores.probe import probe_argv, probe_env, python_probe_argv
 
 from native_harness import (STATE_PAUSED, STATE_RUNNING, NativeWorker, stop_all, wait_for)
 
@@ -139,7 +139,7 @@ def last_json(argv, env=None) -> dict:
 
 def both_probes(*args):
     return (last_json([str(WORKER), "--probe", *args]),
-            last_json(probe_argv(*args), env=probe_env()))
+            last_json(python_probe_argv(*args), env=probe_env()))
 
 
 def test_probe_info_parity(testcore, tmp_path):
@@ -187,3 +187,34 @@ def test_native_report_lists_worker():
     res = subprocess.run([sys.executable, "-m", "multitap.native"], capture_output=True,
                          text=True)
     assert res.returncode == 0 and str(WORKER) in res.stdout
+
+
+def test_opengl_core_frames_reach_shared_memory(testcore_gl, content, tmp_path):
+    w = spawn(0, testcore_gl, content, tmp_path)
+    try:
+        if not w.wait_loaded(timeout=15):
+            if "OpenGL" in w.error:
+                pytest.skip(f"no OpenGL here: {w.error}")
+            pytest.fail(w.error or "worker exited")
+        assert w.info["hw_render"].startswith("OpenGL")
+        w.start()
+        assert wait_for(lambda: w.video.frame_no() > 3)
+        frame = w.video.read_frame()
+        assert (frame.width, frame.height, frame.fmt) == (320, 240, 1)  # XRGB8888
+        assert frame.pixel(300, 10) == 0x336699
+        assert frame.pixel(10, 230) == 0x00FF00  # bottom-left in GL is bottom-left here too
+        assert frame.pixel(10, 10) == 0x336699
+
+        w.input.set_held(BUTTON_B)
+        assert wait_for(lambda: (f := w.video.read_frame()) and f.pixel(300, 10) == 0xFF0000)
+    finally:
+        stop_all([w])
+    assert not w.error
+
+
+def test_probe_trial_runs_an_opengl_core(testcore_gl, content, tmp_path):
+    res = last_json([str(WORKER), "--probe", "trial", str(testcore_gl), str(content),
+                     str(tmp_path / "system")])
+    if not res["ok"] and "OpenGL" in res.get("error", ""):
+        pytest.skip(res["error"])
+    assert res["ok"] and res["frames"] == 10 and res["name"] == "MultiTap GL Test Core"
