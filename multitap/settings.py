@@ -12,6 +12,73 @@ from . import paths
 from .colors import MAX_PLAYERS
 
 MAX_RECENTS = 10
+VERSION = 2
+
+FILTERS = ("nearest", "bilinear")
+ASPECTS = ("core", "4:3", "16:9", "square", "stretch", "custom")
+OSD_POSITIONS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+
+@dataclass
+class GraphicsSettings:
+    filter: str = "nearest"
+    integer_scale: bool = False
+    aspect: str = "core"  # one of ASPECTS; "square" = 1:1 pixels, "stretch" = fill the tile
+    custom_aspect: float = 4 / 3
+    crop_overscan: bool = False
+    shader_preset: str = ""  # RetroArch .slangp; empty = none
+    vsync: bool = True
+
+    def clean(self) -> None:
+        if self.filter not in FILTERS:
+            self.filter = "nearest"
+        if self.aspect not in ASPECTS:
+            self.aspect = "core"
+        if not 0.2 <= self.custom_aspect <= 5:
+            self.custom_aspect = 4 / 3
+
+
+@dataclass
+class OsdSettings:
+    enabled: bool = False
+    fps: bool = True
+    frame_time: bool = False
+    inputs: bool = False
+    audio: bool = True
+    core_info: bool = False
+    position: str = "top-left"
+
+    def clean(self) -> None:
+        if self.position not in OSD_POSITIONS:
+            self.position = "top-left"
+
+
+@dataclass
+class AudioSettings:
+    driver: str = "auto"  # SDL audio driver name, or "auto"
+    device: str = ""  # output device name; empty = the driver's default
+    volume: int = 100  # percent
+    rotation_s: int = 120  # seconds between switching the audible player
+
+    def clean(self) -> None:
+        self.volume = max(0, min(100, self.volume))
+        self.rotation_s = max(5, self.rotation_s)
+
+
+def _section(cls, raw):
+    """Build a settings section from a dict, keeping defaults for missing or mistyped values."""
+    out = cls()
+    if isinstance(raw, dict):
+        for f in fields(cls):
+            if f.name not in raw:
+                continue
+            value, default = raw[f.name], getattr(out, f.name)
+            if isinstance(default, float) and isinstance(value, int) and not isinstance(value, bool):
+                value = float(value)
+            if type(value) is type(default):
+                setattr(out, f.name, value)
+    out.clean()
+    return out
 
 
 @dataclass
@@ -36,9 +103,11 @@ class Settings:
     players: list[PlayerSettings] = field(
         default_factory=lambda: [PlayerSettings() for _ in range(MAX_PLAYERS)])
     layout: dict = field(default_factory=dict)
-    audio_rotation_s: int = 120
     system_dir: str = ""
-    smooth_scaling: bool = False
+    graphics: GraphicsSettings = field(default_factory=GraphicsSettings)
+    osd: OsdSettings = field(default_factory=OsdSettings)
+    audio: AudioSettings = field(default_factory=AudioSettings)
+    version: int = VERSION
 
     # ---- recents -------------------------------------------------------
     def add_recent(self, core_id: str, rom_path: str) -> None:
@@ -59,9 +128,18 @@ class Settings:
 
     @classmethod
     def from_dict(cls, raw: dict) -> "Settings":
+        sections = {"graphics": GraphicsSettings, "osd": OsdSettings, "audio": AudioSettings}
         known = {f.name for f in fields(cls)}
-        kwargs = {k: v for k, v in raw.items() if k in known and k != "players"}
+        kwargs = {k: v for k, v in raw.items()
+                  if k in known and k not in sections and k not in ("players", "version")}
         s = cls(**kwargs)
+        for name, section in sections.items():
+            setattr(s, name, _section(section, raw.get(name)))
+        # Version 1 kept these at the top level.
+        if "graphics" not in raw and raw.get("smooth_scaling") is True:
+            s.graphics.filter = "bilinear"
+        if "audio" not in raw and isinstance(raw.get("audio_rotation_s"), int):
+            s.audio.rotation_s = max(5, raw["audio_rotation_s"])
         pknown = {f.name for f in fields(PlayerSettings)}
         players = []
         for p in raw.get("players", [])[:MAX_PLAYERS]:
@@ -77,7 +155,6 @@ class Settings:
         s.active = active or [0]
         if not isinstance(s.layout, dict):
             s.layout = {}
-        s.audio_rotation_s = max(5, int(s.audio_rotation_s))
         return s
 
 

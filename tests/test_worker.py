@@ -64,3 +64,23 @@ def test_bad_content_reports_error(testcore, tmp_path):
         assert "rejected" in h.error and not h.loaded
     finally:
         stop_workers([h])
+
+
+def test_workers_started_paused_wait_and_then_run_in_step(testcore, content, tmp_path):
+    handles = [spawn_worker(i, {
+        "core_path": str(testcore), "rom_path": str(content),
+        "system_dir": str(tmp_path / "system"), "save_dir": str(tmp_path / f"p{i}"),
+        "no_audio": True, "start_paused": True,
+    }, tag=f"sync{i}") for i in range(2)]
+    try:
+        assert wait_for(lambda: all((h.poll(), h.loaded)[1] for h in handles))
+        assert all("t_loaded" in h.info for h in handles)
+        time.sleep(0.2)
+        assert [h.video.header()[0] for h in handles] == [0, 0]  # no frames while held
+        for h in handles:
+            h.send("resume")
+        time.sleep(0.5)
+        seqs = [h.video.header()[0] for h in handles]
+        assert min(seqs) > 10 and max(seqs) - min(seqs) <= 3
+    finally:
+        stop_workers(handles)

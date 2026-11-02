@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 
@@ -85,6 +86,7 @@ class App(QObject):
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     QApplication.setApplicationName("MultiTap")
     QApplication.setDesktopFileName("multitap")
     qapp = QApplication(sys.argv)

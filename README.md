@@ -41,7 +41,14 @@ Mega Drive, GB/GBC/GBA, PC Engine, …). OpenGL-only cores are listed but greyed
     as that player presses them, so every player can check their input at the same time.
   - **Configure** rebinds buttons. START is blocked if a device is missing, disconnected or
     shared, if a required button is unbound, or if keys overlap or use a hotkey.
-- **⚙** holds the audio rotation interval, the BIOS folder and smooth scaling.
+- **Menu bar:**
+  - **File** repeats the emulator and game pickers (Ctrl+O opens a game, Ctrl+Return starts,
+    Ctrl+Q quits), with recent games and **Get cores…**.
+  - **Inputs** has each player's device and **Configure buttons…**, plus auto-assign.
+  - **Config** holds **Graphics…** (scaling filter, integer scaling, aspect ratio, overscan crop;
+    shader presets and vsync are saved for the upcoming native renderer), **On-screen display**,
+    **Audio…** (backend, output device, volume, how often the audible player switches) and the
+    BIOS folder.
 - Every setting is remembered in `~/.config/multitap/settings.json`.
 
 ## In game

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import signal
 import tempfile
+import threading
 import time
 import traceback
 from array import array
@@ -34,6 +35,8 @@ class Worker:
         self.running = True
         self.core: LibretroCore | None = None
         self.audio = None
+        self._audio_thread: threading.Thread | None = None
+        self._audio_error = ""
         self.sram_path: Path | None = None
         self.last_sram: bytes | None = None
         self.tmp = tempfile.TemporaryDirectory(prefix="multitap-")
@@ -66,14 +69,6 @@ class Worker:
             core.write_sram(self.sram_path.read_bytes())
         self.last_sram = core.read_sram()
 
-        if not cfg.get("no_audio"):
-            try:
-                from .audio import AudioOut
-                self.audio = AudioOut(core.sample_rate,
-                                      f"MultiTap P{cfg.get('player', 0) + 1}")
-            except Exception as exc:
-                self.send("log", f"audio disabled: {exc}")
-
         self.video.set_info(state=STATE_PAUSED if self.paused else STATE_RUNNING,
                             aspect=core.aspect, fps=0.0, sample_rate=core.sample_rate)
         self.send("loaded", {
@@ -81,7 +76,24 @@ class Worker:
             "fps": core.fps,
             "aspect": core.aspect,
             "sample_rate": core.sample_rate,
+            "t_loaded": time.monotonic(),
         })
+        if not cfg.get("no_audio"):
+            # Opening the device can take hundreds of ms; keep it off the load path so every
+            # player is ready at the same time, and so rotation never waits on it.
+            self._audio_thread = threading.Thread(target=self._open_audio, daemon=True)
+            self._audio_thread.start()
+
+    def _open_audio(self) -> None:
+        try:
+            from .audio import AudioOut
+            cfg = self.cfg
+            self.audio = AudioOut(self.core.sample_rate, f"MultiTap P{cfg.get('player', 0) + 1}",
+                                  volume=cfg.get("volume", 100),
+                                  driver=cfg.get("audio_driver", "auto"),
+                                  device=cfg.get("audio_device", ""))
+        except Exception as exc:
+            self._audio_error = f"audio disabled: {exc}"  # sent from the main thread
 
     # ---- callbacks -------------------------------------------------------
     def on_video(self, data, width, height, pitch, fmt):
@@ -147,6 +159,9 @@ class Worker:
             self.poll_commands()
             if not self.running or self.paused:
                 continue
+            if self._audio_error:
+                self.send("log", self._audio_error)
+                self._audio_error = ""
 
             buttons, analog = self.input.read()
             core.input_bits = buttons
@@ -190,6 +205,8 @@ class Worker:
             self.save_sram()
         except Exception as exc:
             self.send("log", f"SRAM save failed: {exc}")
+        if self._audio_thread:
+            self._audio_thread.join(2.0)
         if self.audio:
             self.audio.close()
         if self.core:

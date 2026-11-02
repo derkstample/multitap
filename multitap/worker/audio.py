@@ -22,18 +22,27 @@ def _import_sdl():
 
 
 class AudioOut:
-    def __init__(self, src_rate: float, app_name: str = "MultiTap"):
+    def __init__(self, src_rate: float, app_name: str = "MultiTap", volume: int = 100,
+                 driver: str = "auto", device: str = ""):
         os.environ["SDL_AUDIO_DEVICE_APP_NAME"] = app_name
+        if driver and driver != "auto":
+            os.environ["SDL_AUDIODRIVER"] = driver
         self.sdl = sdl = _import_sdl()
         if sdl.SDL_InitSubSystem(sdl.SDL_INIT_AUDIO) != 0:
             raise RuntimeError(sdl.SDL_GetError().decode())
         want = sdl.SDL_AudioSpec(OUT_RATE, sdl.AUDIO_S16SYS, 2, 1024)
         have = sdl.SDL_AudioSpec(0, 0, 0, 0)
-        self.dev = sdl.SDL_OpenAudioDevice(None, 0, want, have, 0)
+        self.dev = sdl.SDL_OpenAudioDevice(device.encode() if device else None, 0, want, have, 0)
+        if not self.dev and device:  # the saved device is gone; use the default instead
+            self.dev = sdl.SDL_OpenAudioDevice(None, 0, want, have, 0)
         if not self.dev:
             raise RuntimeError(sdl.SDL_GetError().decode())
         self.stream = None
         self._out = ctypes.create_string_buffer(65536)
+        self._mixed = ctypes.create_string_buffer(65536)
+        u8 = ctypes.POINTER(ctypes.c_ubyte)
+        self._out_u8, self._mixed_u8 = ctypes.cast(self._out, u8), ctypes.cast(self._mixed, u8)
+        self.volume = round(max(0, min(100, volume)) * sdl.SDL_MIX_MAXVOLUME / 100)
         self.set_source_rate(src_rate)
         sdl.SDL_PauseAudioDevice(self.dev, 0)
 
@@ -58,8 +67,15 @@ class AudioOut:
             n = sdl.SDL_AudioStreamGet(self.stream, self._out, len(self._out))
             if n <= 0:
                 break
-            if self.queued_ms() < MAX_QUEUE_MS:
-                sdl.SDL_QueueAudio(self.dev, self._out, n)
+            if self.queued_ms() >= MAX_QUEUE_MS:
+                continue
+            buf = self._out
+            if self.volume < sdl.SDL_MIX_MAXVOLUME:
+                ctypes.memset(self._mixed, 0, n)
+                sdl.SDL_MixAudioFormat(self._mixed_u8, self._out_u8, sdl.AUDIO_S16SYS, n,
+                                       self.volume)
+                buf = self._mixed
+            sdl.SDL_QueueAudio(self.dev, buf, n)
 
     def clear(self) -> None:
         self.sdl.SDL_ClearQueuedAudio(self.dev)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -15,11 +16,17 @@ from ..colors import player_color
 from ..input.devices import GamepadManager, pad_state_bits
 from ..input.mapping import RETROPAD, device_key
 from ..layout.model import Layout
+from ..settings import AudioSettings, GraphicsSettings, OsdSettings
 from ..worker.host import WorkerHandle, spawn_worker, stop_workers
 from ..worker.shm import STATE_ERROR
 
 QIMAGE_FORMATS = {0: QImage.Format_RGB555, 1: QImage.Format_RGB32, 2: QImage.Format_RGB16}
 GAP = 4
+LOAD_TIMEOUT_S = 20.0  # start whoever is ready if a player takes longer than this to load
+OVERSCAN_ROWS = 8
+FIXED_ASPECTS = {"4:3": 4 / 3, "16:9": 16 / 9}
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,8 +45,36 @@ class SessionConfig:
     system_dir: str
     layout: Layout
     players: list[SessionPlayer] = field(default_factory=list)
-    audio_rotation_s: int = 120
-    smooth: bool = False
+    graphics: GraphicsSettings = field(default_factory=GraphicsSettings)
+    osd: OsdSettings = field(default_factory=OsdSettings)
+    audio: AudioSettings = field(default_factory=AudioSettings)
+
+
+def frame_geometry(tile_w: float, tile_h: float, frame_w: int, frame_h: int, core_aspect: float,
+                   g: GraphicsSettings) -> tuple[tuple, tuple]:
+    """Where a frame goes in its tile: (source rect in the frame, target rect in the tile)."""
+    sy, sh = 0, frame_h
+    if g.crop_overscan and frame_h > 4 * OVERSCAN_ROWS:
+        sy, sh = OVERSCAN_ROWS, frame_h - 2 * OVERSCAN_ROWS
+    if g.aspect == "stretch":
+        w, h = tile_w, tile_h
+        if g.integer_scale and frame_w <= tile_w and sh <= tile_h:
+            w, h = frame_w * (tile_w // frame_w), sh * (tile_h // sh)
+    else:
+        if g.aspect == "square":
+            aspect = frame_w / sh
+        elif g.aspect == "custom":
+            aspect = g.custom_aspect
+        elif g.aspect in FIXED_ASPECTS:
+            aspect = FIXED_ASPECTS[g.aspect]
+        else:  # the core's display aspect describes the whole frame; keep it when cropping
+            aspect = (core_aspect or frame_w / frame_h) * frame_h / sh
+        k = int(min(tile_h / sh, tile_w / (sh * aspect))) if g.integer_scale else 0
+        if k >= 1:
+            w, h = sh * k * aspect, sh * k
+        else:
+            w, h = (tile_w, tile_w / aspect) if tile_w / tile_h < aspect else (tile_h * aspect, tile_h)
+    return (0, sy, frame_w, sh), ((tile_w - w) / 2, (tile_h - h) / 2, w, h)
 
 
 class SessionWindow(QOpenGLWidget):
@@ -64,6 +99,8 @@ class SessionWindow(QOpenGLWidget):
         self._kbd_bits = [0] * len(cfg.players)
         self._pad_players: dict[str, list[int]] = {}
         self._stopped = False
+        self._started = False  # all workers released from their initial pause
+        self._spawned_at = 0.0
 
         for slot, p in enumerate(cfg.players):
             if p.device.get("kind") == "keyboard":
@@ -72,14 +109,16 @@ class SessionWindow(QOpenGLWidget):
             else:
                 self._pad_players.setdefault(device_key(p.device), []).append(slot)
 
-        self._rotate = QTimer(self, interval=max(5, cfg.audio_rotation_s) * 1000,
+        self._rotate = QTimer(self, interval=max(5, cfg.audio.rotation_s) * 1000,
                               timeout=self._rotate_audio)
         self._poll = QTimer(self, interval=100, timeout=self._poll_workers)
         self.frameSwapped.connect(self.update)
 
     # ---- lifecycle -------------------------------------------------------
     def start(self) -> None:
+        """Spawn every worker paused; _poll_workers releases them together once all have loaded."""
         cfg = self.cfg
+        self._spawned_at = time.monotonic()
         for slot, p in enumerate(cfg.players):
             save_dir = paths.slot_dir(p.index, cfg.core_id) / "saves"
             h = spawn_worker(p.index, {
@@ -87,6 +126,10 @@ class SessionWindow(QOpenGLWidget):
                 "system_dir": cfg.system_dir, "save_dir": str(save_dir),
                 "username": p.name or f"Player {p.index + 1}",
                 "audible": slot == self.audible,
+                "start_paused": True,
+                "volume": cfg.audio.volume,
+                "audio_driver": cfg.audio.driver,
+                "audio_device": cfg.audio.device,
             })
             self.handles.append(h)
             self.frames.append((0, None, None))
@@ -94,10 +137,21 @@ class SessionWindow(QOpenGLWidget):
         self.pads.devicesChanged.connect(self._check_devices)
         for key in self._pad_players:
             self._on_pad_state(key, *self.pads.state(key))
+        self._poll.setInterval(20)  # notice the last load quickly
         self._poll.start()
-        if len(self.handles) > 1:
-            self._rotate.start()
         self._check_devices()
+
+    def _release(self) -> None:
+        """Unpause every worker in one pass so all players start on the same frame."""
+        self._started = True
+        self._poll.setInterval(100)
+        loads = [f"P{h.player + 1} {h.info['t_loaded'] - self._spawned_at:.2f}s"
+                 for h in self.handles if "t_loaded" in h.info]
+        log.info("players loaded: %s; released together", ", ".join(loads) or "none")
+        if not self.paused:
+            self._broadcast("resume")
+            if len(self.handles) > 1:
+                self._rotate.start()
 
     def stop(self) -> threading.Thread:
         """Stop workers in the background (they flush SRAM); returns the thread doing it."""
@@ -123,6 +177,9 @@ class SessionWindow(QOpenGLWidget):
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
+        if not self._started:  # still loading: workers are paused; _release honours this
+            self.update()
+            return
         self._broadcast("pause" if paused else "resume")
         if paused:
             self._rotate.stop()
@@ -146,6 +203,10 @@ class SessionWindow(QOpenGLWidget):
     def _poll_workers(self) -> None:
         for i, h in enumerate(self.handles):
             h.poll()
+        if not self._started and (
+                all(h.loaded or h.error or h.exited for h in self.handles)
+                or time.monotonic() - self._spawned_at > LOAD_TIMEOUT_S):
+            self._release()
         # If the audible player failed to load, hand audio to the first healthy one.
         cur = self.handles[self.audible] if self.handles else None
         if cur and (cur.error or cur.exited):
@@ -246,7 +307,8 @@ class SessionWindow(QOpenGLWidget):
             p.end()
             return
         rects = self.cfg.layout.pixel_rects(self.width(), self.height(), GAP)
-        p.setRenderHint(QPainter.SmoothPixmapTransform, self.cfg.smooth)
+        g = self.cfg.graphics
+        p.setRenderHint(QPainter.SmoothPixmapTransform, g.filter == "bilinear")
         tiles = []
         for slot, (x, y, w, h) in enumerate(rects[:len(self.handles)]):
             tile = QRectF(x, y, w, h)
@@ -254,10 +316,9 @@ class SessionWindow(QOpenGLWidget):
             handle = self.handles[slot]
             img = self._latest(slot)
             if img is not None:
-                aspect = handle.video.header()[3] or img.width() / max(1, img.height())
-                tw, th = (w, w / aspect) if w / h < aspect else (h * aspect, h)
-                target = QRectF(x + (w - tw) / 2, y + (h - th) / 2, tw, th)
-                p.drawImage(target, img)
+                src, (tx, ty, tw, th) = frame_geometry(w, h, img.width(), img.height(),
+                                                       handle.video.header()[3], g)
+                p.drawImage(QRectF(x + tx, y + ty, tw, th), img, QRectF(*src))
             tiles.append((slot, tile, handle, img is not None))
         # XRGB8888 frames carry an undefined (often zero) X byte that the GL engine copies into
         # the framebuffer's alpha. Force everything opaque so the window never turns see-through.

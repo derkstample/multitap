@@ -78,9 +78,9 @@ QPushButton#startButton:hover {{
 }}
 QPushButton#startButton:disabled {{ background: #2a2e37; color: #626877; }}
 
-QToolButton#iconButton {{ background: transparent; border: none; border-radius: 8px; padding: 6px; }}
-QToolButton#iconButton:hover {{ background: {SURFACE_2}; }}
-QToolButton#iconButton::menu-indicator {{ image: none; width: 0; }}
+QMenuBar {{ background: {BG}; padding: 2px 8px; }}
+QMenuBar::item {{ padding: 5px 10px; border-radius: 6px; background: transparent; }}
+QMenuBar::item:selected {{ background: {SURFACE_2}; }}
 
 QMenu {{ background: {SURFACE}; border: 1px solid {BORDER}; padding: 6px; }}
 QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}

@@ -115,3 +115,85 @@ def test_start_passes_slots_in_layout_order(launcher, content):
     cfg = got[0]
     assert [p.index for p in cfg.players] == [0, 2]
     assert cfg.layout.count == 2 and cfg.layout.is_valid()
+
+
+def _menu(w, title):
+    for act in w.menuBar().actions():
+        if act.text().replace("&", "") == title:
+            return act.menu()
+    raise AssertionError(f"no {title} menu")
+
+
+def _open(menu):
+    menu.aboutToShow.emit()
+    return {a.text().replace("&", ""): a for a in menu.actions() if not a.isSeparator()}
+
+
+def test_menu_bar_replaces_the_gear(launcher):
+    from PySide6.QtWidgets import QToolButton
+    titles = [a.text().replace("&", "") for a in launcher.menuBar().actions()]
+    assert titles == ["File", "Inputs", "Config"]
+    assert not launcher.findChildren(QToolButton, "iconButton")
+    config = _open(_menu(launcher, "Config"))
+    assert {"Graphics…", "On-screen display", "Audio…", "BIOS / firmware folder…"} <= set(config)
+
+
+def test_file_menu_mirrors_core_and_game_pickers(launcher, content):
+    w = launcher
+    file = _open(_menu(w, "File"))
+    emulators = _open(file["Emulator"].menu())
+    assert any(a.isChecked() for a in emulators.values())
+    assert file["Start"].isEnabled() == w.start_btn.isEnabled()
+
+    w.s.add_recent(w.current_core().core_id, str(content))
+    recents = _open(file["Recent games"].menu())
+    next(a for t, a in recents.items() if content.name in t).trigger()
+    assert w.rom_path() == str(content)
+
+
+def test_inputs_menu_has_one_entry_per_player(launcher):
+    w = launcher
+    inputs = _open(_menu(w, "Inputs"))
+    players = [t for t in inputs if t.startswith("Player")]
+    assert players == ["Player 1", "Player 2"]
+    p2 = _open(inputs["Player 2"].menu())
+    assert p2["Configure buttons…"].isEnabled()
+    devices = _open(p2["Device"].menu())
+    checked = [t for t, a in devices.items() if a.isChecked()]
+    assert checked == [w.cards[1].device.currentText()]
+    devices["No input device"].trigger()
+    assert w.s.players[1].device is None
+    p2 = _open(_open(_menu(w, "Inputs"))["Player 2"].menu())
+    assert not p2["Configure buttons… (choose a device first)"].isEnabled()
+
+
+def test_osd_menu_toggles_settings(launcher):
+    w = launcher
+    osd = _open(_open(_menu(w, "Config"))["On-screen display"].menu())
+    assert not osd["Frame rate"].isEnabled()  # greyed out until the OSD is on
+    osd["Show on-screen display"].trigger()
+    assert w.s.osd.enabled
+    osd = _open(_open(_menu(w, "Config"))["On-screen display"].menu())
+    osd["Input display"].trigger()
+    assert w.s.osd.inputs
+
+
+def test_config_dialogs_return_edited_copies(qapp):
+    from multitap.settings import AudioSettings, GraphicsSettings
+    from multitap.ui.config_dialogs import AudioDialog, GraphicsDialog
+    g = GraphicsSettings()
+    dlg = GraphicsDialog(g)
+    dlg.filter.setCurrentIndex(dlg.filter.findData("bilinear"))
+    dlg.aspect.setCurrentIndex(dlg.aspect.findData("custom"))
+    assert dlg.custom.isEnabled()
+    dlg.custom.setValue(1.25)
+    out = dlg.result_settings()
+    assert (out.filter, out.aspect, out.custom_aspect) == ("bilinear", "custom", 1.25)
+    assert g == GraphicsSettings()  # the original is untouched
+
+    dlg = AudioDialog(AudioSettings(device="Gone Speakers"))
+    assert dlg.device.currentData() == "Gone Speakers"  # a missing saved device is kept
+    dlg.volume.setValue(40)
+    dlg.rotation.setValue(30)
+    out = dlg.result_settings()
+    assert (out.volume, out.rotation_s, out.device) == (40, 30, "Gone Speakers")

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QProcess, QProcessEnvironment, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap, QTransform
+from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, Qt, QTimer, Signal
+from PySide6.QtGui import QActionGroup, QColor, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QComboBox, QFileDialog, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPushButton,
-                               QSizePolicy, QSpinBox, QStyledItemDelegate, QToolButton,
-                               QVBoxLayout, QWidget, QWidgetAction)
+                               QSizePolicy, QStyledItemDelegate, QVBoxLayout, QWidget)
 
 from .. import settings as settings_mod
-from ..colors import MAX_PLAYERS
+from ..colors import MAX_PLAYERS, player_color
 from ..cores import discovery
 from ..cores.discovery import CoreInfo
 from ..cores.downloader import installed_path
@@ -24,9 +24,10 @@ from ..input.mapping import (RETROPAD, device_key, device_label, keyboard_bindin
                              validate_players)
 from ..layout.model import PRESETS, Layout
 from ..roms.validate import ARCHIVE_EXTS, quick_check
-from ..settings import PlayerSettings, Settings
+from ..settings import OSD_POSITIONS, PlayerSettings, Settings
 from . import theme
 from .board import PlayerBoard
+from .config_dialogs import AudioDialog, GraphicsDialog
 from .controllers import CONTROLLERS, Controller, controller_for
 from .cores_dialog import CoresDialog
 from .input_dialog import InputDialog
@@ -38,22 +39,13 @@ GRID_LABELS = {(2, 1): "Side by side", (1, 2): "Stacked"}
 NO_DEVICE = "No input device"
 
 
-def _gear_icon(color: str = theme.MUTED, size: int = 22) -> QIcon:
-    pm = QPixmap(size * 2, size * 2)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c, teeth = QPointF(size, size), 8
-    path = QPainterPath()
-    path.addEllipse(c, size * 0.62, size * 0.62)
-    for i in range(teeth):
-        tooth = QPainterPath()
-        tooth.addRoundedRect(QRectF(-size * 0.14, -size * 0.86, size * 0.28, size * 0.4), 2, 2)
-        path |= QTransform().translate(c.x(), c.y()).rotate(i * 360 / teeth).map(tooth)
-    hole = QPainterPath()
-    hole.addEllipse(c, size * 0.26, size * 0.26)
-    p.fillPath(path - hole, QColor(color))
-    p.end()
+OSD_ITEMS = [("fps", "Frame rate"), ("frame_time", "Frame time"), ("inputs", "Input display"),
+             ("audio", "Audible player"), ("core_info", "Core and game")]
+
+
+def _swatch(color: str, size: int = 12) -> QIcon:
+    pm = QPixmap(size, size)
+    pm.fill(QColor(color))
     return QIcon(pm)
 
 
@@ -165,17 +157,11 @@ class LauncherWindow(QMainWindow):
         self.issues.setStyleSheet(f"color:{theme.DANGER};")
         self.issues.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.issues.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        gear = QToolButton()
-        gear.setObjectName("iconButton")
-        gear.setIcon(_gear_icon())
-        gear.setToolTip("More settings")
-        gear.setPopupMode(QToolButton.InstantPopup)
-        gear.setMenu(self._build_settings_menu(gear))
         self.start_btn = QPushButton("START")
         self.start_btn.setObjectName("startButton")
         self.start_btn.setCursor(Qt.PointingHandCursor)
         self.start_btn.setMinimumHeight(46)
-        for w in (auto, reset_layout, gear, self.start_btn):
+        for w in (auto, reset_layout, self.start_btn):
             w.setFocusPolicy(Qt.NoFocus)
         bottom.addWidget(auto)
         bottom.addWidget(self.pad_note)
@@ -184,7 +170,6 @@ class LauncherWindow(QMainWindow):
         bottom.addWidget(self.grid_combo)
         bottom.addWidget(reset_layout)
         bottom.addWidget(self.issues, 1)
-        bottom.addWidget(gear)
         bottom.addWidget(self.start_btn)
         root.addLayout(bottom)
 
@@ -207,6 +192,7 @@ class LauncherWindow(QMainWindow):
         pads.activity.connect(self._on_pad_activity)
         self._input_timer = QTimer(self, interval=33, timeout=self._poll_inputs)
         QApplication.instance().installEventFilter(self)
+        self._build_menus()
 
         # ---- restore state ------------------------------------------------
         self._sync_board()
@@ -215,29 +201,136 @@ class LauncherWindow(QMainWindow):
         self.reload_cores(select=self.s.core_path)
         self._input_timer.start()
 
-    def _build_settings_menu(self, parent) -> QMenu:
-        menu = QMenu(parent)
-        row = QWidget()
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(14, 6, 14, 6)
-        rl.addWidget(QLabel("Switch audible player every"))
-        self.rotation = QSpinBox()
-        self.rotation.setRange(5, 3600)
-        self.rotation.setSuffix(" s")
-        self.rotation.setValue(self.s.audio_rotation_s)
-        self.rotation.valueChanged.connect(self._on_rotation)
-        rl.addWidget(self.rotation)
-        act = QWidgetAction(menu)
-        act.setDefaultWidget(row)
-        menu.addAction(act)
-        menu.addSeparator()
-        bios = menu.addAction("BIOS / firmware folder…")
-        bios.triggered.connect(self._choose_bios)
-        smooth = menu.addAction("Smooth scaling in game")
-        smooth.setCheckable(True)
-        smooth.setChecked(self.s.smooth_scaling)
-        smooth.toggled.connect(self._on_smooth)
-        return menu
+    # ---- menu bar -------------------------------------------------------------
+    # Submenus are rebuilt each time they open, so they always match the controls on screen.
+    def _build_menus(self):
+        bar = self.menuBar()
+        file = bar.addMenu("&File")
+        self.emulator_menu = file.addMenu("&Emulator")
+        self.emulator_menu.aboutToShow.connect(self._fill_emulator_menu)
+        file.addAction("&Add core…", self._browse_core)
+        file.addAction("&Get cores…", self._get_cores)
+        file.addSeparator()
+        file.addAction("&Open game…", QKeySequence.Open, self._browse_rom)
+        self.recent_menu = file.addMenu("&Recent games")
+        self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
+        file.addSeparator()
+        self.start_action = file.addAction("&Start", QKeySequence("Ctrl+Return"), self._start)
+        self.start_action.setEnabled(False)
+        file.addSeparator()
+        file.addAction("&Quit", QKeySequence("Ctrl+Q"), QApplication.quit)
+
+        self.inputs_menu = bar.addMenu("&Inputs")
+        self.inputs_menu.aboutToShow.connect(self._fill_inputs_menu)
+
+        config = bar.addMenu("&Config")
+        config.addAction("&Graphics…", self._configure_graphics)
+        self.osd_menu = config.addMenu("&On-screen display")
+        self.osd_menu.aboutToShow.connect(self._fill_osd_menu)
+        config.addAction("&Audio…", self._configure_audio)
+        config.addSeparator()
+        config.addAction("&BIOS / firmware folder…", self._choose_bios)
+
+    @staticmethod
+    def _radio(menu: QMenu, items, on_pick):
+        """Add exclusive checkable actions: items are (label, value, checked, enabled)."""
+        group = QActionGroup(menu)
+        for label, value, checked, enabled in items:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(checked)
+            act.setEnabled(enabled)
+            act.triggered.connect(lambda _=False, v=value: on_pick(v))
+            group.addAction(act)
+
+    def _fill_emulator_menu(self):
+        m = self.emulator_menu
+        m.clear()
+        if not self.cores:
+            m.addAction("No cores found").setEnabled(False)
+            return
+        current = self.core_combo.currentIndex()
+        self._radio(m, [(self.core_combo.itemText(i), i, i == current, not c.error)
+                        for i, c in enumerate(self.cores)], self.core_combo.setCurrentIndex)
+
+    def _fill_recent_menu(self):
+        m = self.recent_menu
+        m.clear()
+        core = self.current_core()
+        recents = self.s.recent_for(core.core_id) if core else []
+        for r in recents:
+            p = Path(r["path"])
+            act = m.addAction(f"{p.name}  —  {p.parent}")
+            act.setEnabled(p.is_file())
+            act.triggered.connect(lambda _=False, path=str(p): self._set_rom(path))
+        if not recents:
+            m.addAction("No recent games").setEnabled(False)
+
+    def _fill_inputs_menu(self):
+        m = self.inputs_menu
+        m.clear()
+        for slot in self.s.active:
+            card = self.cards.get(slot)
+            if card is None:
+                continue
+            name = self.s.players[slot].name
+            sub = m.addMenu(_swatch(player_color(slot)),
+                            f"Player {slot + 1}" + (f" — {name}" if name else ""))
+            devices = sub.addMenu("Device")
+            combo = card.device
+            self._radio(devices, [(combo.itemText(j), j, j == combo.currentIndex(), True)
+                                  for j in range(combo.count())], combo.setCurrentIndex)
+            configure = sub.addAction("Configure buttons…",
+                                      lambda s=slot: self._configure_player(s))
+            if not self.s.players[slot].device:
+                configure.setEnabled(False)
+                configure.setText("Configure buttons… (choose a device first)")
+        m.addSeparator()
+        m.addAction("Auto-assign controllers", self._auto_assign)
+
+    def _fill_osd_menu(self):
+        m = self.osd_menu
+        m.clear()
+        osd = self.s.osd
+        note = m.addAction("Shown by the native renderer (not available yet)")
+        note.setEnabled(False)
+        m.addSeparator()
+
+        def toggle(label, attr):
+            act = m.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(getattr(osd, attr))
+            act.toggled.connect(lambda on: self._set_osd(attr, on))
+            return act
+
+        toggle("Show on-screen display", "enabled")
+        m.addSeparator()
+        for attr, label in OSD_ITEMS:
+            toggle(label, attr).setEnabled(osd.enabled)
+        pos = m.addMenu("Position")
+        pos.setEnabled(osd.enabled)
+
+        def set_position(v):
+            osd.position = v
+            self._save_later()
+        self._radio(pos, [(p.replace("-", " ").capitalize(), p, p == osd.position, True)
+                          for p in OSD_POSITIONS], set_position)
+
+    def _set_osd(self, attr: str, on: bool):
+        setattr(self.s.osd, attr, on)
+        self._save_later()
+
+    def _configure_graphics(self):
+        dlg = GraphicsDialog(self.s.graphics, self)
+        if dlg.exec():
+            self.s.graphics = dlg.result_settings()
+            self._save_later()
+
+    def _configure_audio(self):
+        dlg = AudioDialog(self.s.audio, self)
+        if dlg.exec():
+            self.s.audio = dlg.result_settings()
+            self._save_later()
 
     # ---- persistence ------------------------------------------------------
     def _save_later(self):
@@ -522,14 +615,6 @@ class LauncherWindow(QMainWindow):
         self.s.players[slot].name = name
         self._save_later()
 
-    def _on_rotation(self, v: int):
-        self.s.audio_rotation_s = v
-        self._save_later()
-
-    def _on_smooth(self, on: bool):
-        self.s.smooth_scaling = on
-        self._save_later()
-
     def _choose_bios(self):
         d = QFileDialog.getExistingDirectory(self, "BIOS / firmware folder",
                                              str(self.s.effective_system_dir()))
@@ -692,6 +777,7 @@ class LauncherWindow(QMainWindow):
             return
         issues = self._blocking_issues()
         self.start_btn.setEnabled(not issues)
+        self.start_action.setEnabled(not issues)
         self.start_btn.setToolTip("\n".join(issues) if issues else "Launch the game for every player")
         more = f"  (+{len(issues) - 1} more)" if len(issues) > 1 else ""
         self.issues.setText(issues[0] + more if issues else "")
@@ -712,7 +798,7 @@ class LauncherWindow(QMainWindow):
         self.flush_settings()
         cfg = SessionConfig(core.path, core.core_id, rom, str(self.s.effective_system_dir()),
                             Layout.from_dict(self.layout_model.to_dict(), len(players)), players,
-                            self.s.audio_rotation_s, self.s.smooth_scaling)
+                            replace(self.s.graphics), replace(self.s.osd), replace(self.s.audio))
         self.startRequested.emit(cfg)
 
     def closeEvent(self, e):
