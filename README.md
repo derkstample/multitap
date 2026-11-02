@@ -6,11 +6,24 @@ a libretro core, and every player's core runs in a separate process.
 
 ## Setup
 
+Build requirements: a C++20 compiler (GCC 11+ or Clang 14+), CMake 3.24+ (pip fetches one if
+the system has none), pkg-config, and the libarchive and SDL2 development headers (SDL2 is for
+the upcoming native session). On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential cmake pkg-config libsdl2-dev libarchive-dev
+```
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m multitap
 ```
+
+`pip install` also builds the native runtime with CMake (scikit-build-core), downloading
+nlohmann/json and doctest if they aren't installed, and puts the binaries in `multitap/bin/`.
+`.venv/bin/python -m multitap.native` reports which binaries were found. Re-run the
+`pip install` line after changing anything under `native/`.
 
 Cores are found automatically in:
 
@@ -74,4 +87,19 @@ go in `~/.local/share/multitap/system/`, or point **BIOS folder…** elsewhere.
 ```
 
 `tests/fixtures/testcore.c` is a tiny libretro core that the tests build with gcc. It drives the
-worker, probe and SRAM tests without needing any ROMs.
+worker, probe and SRAM tests without needing any ROMs. `tests/test_native_worker.py` runs the same
+checks against the C++ `multitap-worker` (skipped when it isn't built).
+
+The native unit tests (shared-memory triple buffer and audio ring) run with ctest from the build
+folder that `pip install` used:
+
+```bash
+.venv/bin/ctest --test-dir build/cp312-cp312-linux_x86_64
+```
+
+## Native runtime (in progress)
+
+The game runtime is moving to C++ (`native/`); the Python launcher stays. Today
+`multitap-worker` runs one player's core and talks to its parent through shared memory
+(`native/common/shm.hpp` documents the layout) and a JSON control socket
+(`native/worker/main.cpp`). The launcher still uses the Python worker.

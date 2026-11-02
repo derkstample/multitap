@@ -1,3 +1,7 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
 [project]
 name = "multitap"
 version = "0.1.0"
@@ -10,16 +14,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+# cmake provides ctest for the native unit tests (see README).
+dev = ["pytest>=8", "cmake>=3.24"]
 
 [project.scripts]
 multitap = "multitap.app:main"
 
-[tool.setuptools.packages.find]
-include = ["multitap*"]
-
-[tool.setuptools.package-data]
-multitap = ["assets/controllers/*", "assets/icons/*"]
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.source-dir = "native"
+cmake.version = ">=3.24"
+cmake.build-type = "Release"
+# A fixed build dir makes re-installs incremental and gives ctest a stable place to run.
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["multitap"]
+# CMake installs to <prefix>/bin; the prefix is the package, so binaries land in multitap/bin/.
+wheel.install-dir = "multitap"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
