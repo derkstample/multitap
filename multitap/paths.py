@@ -19,6 +19,20 @@ def data_dir() -> Path:
     return _xdg("XDG_DATA_HOME", ".local/share") / APP
 
 
+def state_dir() -> Path:
+    """Logs and other state worth keeping across runs but not backing up."""
+    return _xdg("XDG_STATE_HOME", ".local/state") / APP
+
+
+def runtime_dir() -> Path:
+    """Per-login scratch space (the session config); falls back to the temp dir."""
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if base:
+        return Path(base) / APP
+    import tempfile
+    return Path(tempfile.gettempdir()) / f"{APP}-{os.getuid()}"
+
+
 def settings_file() -> Path:
     return config_dir() / "settings.json"
 

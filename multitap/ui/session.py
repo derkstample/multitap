@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
@@ -15,8 +14,8 @@ from .. import paths
 from ..colors import player_color
 from ..input.devices import GamepadManager, pad_state_bits
 from ..input.mapping import RETROPAD, device_key
-from ..layout.model import Layout
-from ..settings import AudioSettings, GraphicsSettings, OsdSettings
+from ..session_config import SessionConfig, SessionPlayer  # noqa: F401 (re-exported)
+from ..settings import GraphicsSettings
 from ..worker.host import WorkerHandle, spawn_worker, stop_workers
 from ..worker.shm import STATE_ERROR
 
@@ -27,27 +26,6 @@ OVERSCAN_ROWS = 8
 FIXED_ASPECTS = {"4:3": 4 / 3, "16:9": 16 / 9}
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class SessionPlayer:
-    index: int
-    name: str
-    device: dict
-    bindings: dict
-
-
-@dataclass
-class SessionConfig:
-    core_path: str
-    core_id: str
-    rom_path: str
-    system_dir: str
-    layout: Layout
-    players: list[SessionPlayer] = field(default_factory=list)
-    graphics: GraphicsSettings = field(default_factory=GraphicsSettings)
-    osd: OsdSettings = field(default_factory=OsdSettings)
-    audio: AudioSettings = field(default_factory=AudioSettings)
 
 
 def frame_geometry(tile_w: float, tile_h: float, frame_w: int, frame_h: int, core_aspect: float,

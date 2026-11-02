@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes.util
 import os
 import warnings
 from dataclasses import replace
@@ -18,7 +19,17 @@ ASPECT_LABELS = {
     "core": "Core provided", "4:3": "4:3", "16:9": "16:9", "square": "Square pixels (1:1)",
     "stretch": "Stretch to fill", "custom": "Custom",
 }
-NATIVE_NOTE = "Takes effect with the native renderer, which isn't available yet."
+
+def renderer_note() -> str:
+    """Why some graphics options won't apply, or "" if they all will."""
+    from . import native_session
+    if not native_session.available():
+        return ("Shader presets and vertical sync take effect with the native renderer "
+                "(multitap-session), which isn't built.")
+    if not ctypes.util.find_library("rashader"):
+        return ("Shader presets need librashader (librashader.so), which isn't installed; "
+                "games show without the preset until it is.")
+    return ""
 
 
 class GraphicsDialog(QDialog):
@@ -71,18 +82,18 @@ class GraphicsDialog(QDialog):
         shader_row = QHBoxLayout()
         shader_row.addWidget(self.shader, 1)
         shader_row.addWidget(browse)
-        self.shader.setToolTip("A RetroArch shader preset (.slangp). " + NATIVE_NOTE)
+        self.shader.setToolTip("A RetroArch shader preset (.slangp), applied with librashader")
         form.addRow("Shader preset", shader_row)
 
         self.vsync = QCheckBox("Vertical sync")
-        self.vsync.setToolTip(NATIVE_NOTE)
+        self.vsync.setToolTip("Wait for the display's refresh: no tearing, slightly more latency")
         self.vsync.setChecked(g.vsync)
         form.addRow("", self.vsync)
 
-        note = QLabel("Shader presets and vertical sync are saved now and used once the native "
-                      "renderer arrives.")
+        note = QLabel(renderer_note())
         note.setObjectName("caption")
         note.setWordWrap(True)
+        note.setVisible(bool(note.text()))
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)

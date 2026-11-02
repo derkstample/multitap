@@ -24,15 +24,15 @@ from ..input.mapping import (RETROPAD, device_key, device_label, keyboard_bindin
                              validate_players)
 from ..layout.model import PRESETS, Layout
 from ..roms.validate import ARCHIVE_EXTS, quick_check
+from ..session_config import SessionConfig, SessionPlayer
 from ..settings import OSD_POSITIONS, PlayerSettings, Settings
-from . import theme
+from . import native_session, theme
 from .board import PlayerBoard
 from .config_dialogs import AudioDialog, GraphicsDialog
 from .controllers import CONTROLLERS, Controller, controller_for
 from .cores_dialog import CoresDialog
 from .input_dialog import InputDialog
 from .player_card import PlayerCard
-from .session import SessionConfig, SessionPlayer
 
 TRIAL_TIMEOUT_MS = 10000
 GRID_LABELS = {(2, 1): "Side by side", (1, 2): "Stacked"}
@@ -292,9 +292,10 @@ class LauncherWindow(QMainWindow):
         m = self.osd_menu
         m.clear()
         osd = self.s.osd
-        note = m.addAction("Shown by the native renderer (not available yet)")
-        note.setEnabled(False)
-        m.addSeparator()
+        if not native_session.available():
+            note = m.addAction("Shown by the native renderer (not built)")
+            note.setEnabled(False)
+            m.addSeparator()
 
         def toggle(label, attr):
             act = m.addAction(label)
@@ -319,6 +320,11 @@ class LauncherWindow(QMainWindow):
     def _set_osd(self, attr: str, on: bool):
         setattr(self.s.osd, attr, on)
         self._save_later()
+
+    def set_osd_enabled(self, on: bool):
+        """Keep the in-game F1 toggle."""
+        if self.s.osd.enabled != on:
+            self._set_osd("enabled", on)
 
     def _configure_graphics(self):
         dlg = GraphicsDialog(self.s.graphics, self)

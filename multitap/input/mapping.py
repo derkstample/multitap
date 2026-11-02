@@ -17,7 +17,7 @@ BUTTON_ORDER = ["Up", "Down", "Left", "Right", "B", "A", "Y", "X",
 REQUIRED = ("Up", "Down", "Left", "Right", "B", "A", "Start", "Select")
 
 RESERVED_KEYS = {int(Qt.Key_Escape): "Esc (menu)", int(Qt.Key_R): "R (reset)",
-                 int(Qt.Key_P): "P (pause)"}
+                 int(Qt.Key_P): "P (pause)", int(Qt.Key_F1): "F1 (on-screen display)"}
 
 K = Qt.Key
 KEYBOARD_PRESETS: dict[str, dict[str, int]] = {
@@ -43,6 +43,45 @@ PAD_DEFAULTS: dict[str, str] = {
 }
 
 AXIS_THRESHOLD = 16000
+
+
+# Qt key codes -> SDL2 keycodes (SDL_Keycode), for the native session. Printable keys are the
+# same ASCII code except letters, which SDL keeps lowercase. Qt reports the shifted symbol of a
+# US layout ("!" for Shift+1); SDL reports the unshifted key, so those map back to it.
+_SDL_SCANCODE_MASK = 1 << 30
+_QT_SPECIAL_TO_SDL_SCANCODE = {
+    K.Key_CapsLock: 57, K.Key_Print: 70, K.Key_ScrollLock: 71, K.Key_Pause: 72,
+    K.Key_Insert: 73, K.Key_Home: 74, K.Key_PageUp: 75, K.Key_End: 77, K.Key_PageDown: 78,
+    K.Key_Right: 79, K.Key_Left: 80, K.Key_Down: 81, K.Key_Up: 82, K.Key_NumLock: 83,
+    K.Key_Enter: 88, K.Key_Menu: 101,
+    K.Key_Control: 224, K.Key_Shift: 225, K.Key_Alt: 226, K.Key_Meta: 227, K.Key_AltGr: 230,
+}
+_QT_SPECIAL_TO_SDL = {
+    K.Key_Escape: 27, K.Key_Tab: 9, K.Key_Backtab: 9, K.Key_Backspace: 8, K.Key_Return: 13,
+    K.Key_Delete: 127,
+}
+_US_SHIFTED = dict(zip('!@#$%^&*()_+{}|:"<>?~', "1234567890-=[]\\;',./`"))
+
+
+def qt_to_sdl_key(key: int) -> int | None:
+    """SDL keycode for a Qt key code, or None if SDL has no equivalent."""
+    key = int(key)
+    if int(K.Key_F1) <= key <= int(K.Key_F12):
+        return _SDL_SCANCODE_MASK | (58 + key - int(K.Key_F1))
+    if int(K.Key_F13) <= key <= int(K.Key_F24):
+        return _SDL_SCANCODE_MASK | (104 + key - int(K.Key_F13))
+    for table, mask in ((_QT_SPECIAL_TO_SDL_SCANCODE, _SDL_SCANCODE_MASK),
+                        (_QT_SPECIAL_TO_SDL, 0)):
+        for qt, code in table.items():
+            if key == int(qt):
+                return mask | code
+    if 0x20 <= key <= 0x7E:
+        ch = chr(key)
+        ch = _US_SHIFTED.get(ch, ch)
+        return ord(ch.lower())
+    if 0xA0 <= key <= 0xFF:  # Latin-1 letters (e.g. a German keyboard's ö)
+        return ord(chr(key).lower())
+    return None
 
 
 def key_name(key: int) -> str:

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import multitap
 
-BINARIES = ("multitap-worker",)
+BINARIES = ("multitap-worker", "multitap-session")
 
 
 def bin_dirs() -> list[Path]:
