@@ -150,6 +150,8 @@ def probe_system_info(core_path: str | Path, timeout: float = 10.0) -> dict:
         return {"error": (res.stderr.strip().splitlines() or ["probe failed"])[-1]}
     except subprocess.TimeoutExpired:
         return {"error": "Core did not respond"}
+    except FileNotFoundError as exc:  # the native runtime isn't built
+        return {"error": str(exc), "uncached": True}
 
 
 def describe(core_path: str | Path, source: str = "custom", cache: dict | None = None) -> CoreInfo:
@@ -167,9 +169,10 @@ def describe(core_path: str | Path, source: str = "custom", cache: dict | None =
     if not probe or probe.get("mtime") != mtime:
         probe = probe_system_info(core_path)
         probe["mtime"] = mtime
-        cache[key] = probe
-        if own_cache:
-            _save_cache(cache)
+        if not probe.pop("uncached", False):
+            cache[key] = probe
+            if own_cache:
+                _save_cache(cache)
 
     core = CoreInfo(str(core_path), cid, probe.get("library_name") or cid, source=source)
     if probe.get("error"):

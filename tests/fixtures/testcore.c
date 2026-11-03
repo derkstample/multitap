@@ -6,7 +6,8 @@
  * Audio:   440 Hz square wave at 44100 Hz while any button is held.
  * SRAM:    64 bytes: [0]=0xAB marker, [1..2]=last button mask, [4..7]=frames since reset,
  *          [8..11]=reset count.
- * A file whose content starts with "BAD" is rejected by retro_load_game.
+ * A file whose content starts with "BAD" is rejected by retro_load_game; one starting with
+ * "FAST" reports 120 fps while still making 1/60 s of audio per frame (as Dolphin does).
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -39,6 +40,7 @@ static batch_t batch_cb; static poll_t poll_cb; static state_t state_cb;
 static uint32_t fb[W * H];
 static uint8_t sram[64];
 static uint32_t tint, frames, resets, phase;
+static bool fast;
 static bool bitmasks;
 
 void retro_set_environment(env_t cb) { env_cb = cb; }
@@ -64,7 +66,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info) {
     info->geometry.base_width = W; info->geometry.base_height = H;
     info->geometry.max_width = W; info->geometry.max_height = H;
     info->geometry.aspect_ratio = 4.0f / 3.0f;
-    info->timing.fps = 60.0; info->timing.sample_rate = 44100.0;
+    info->timing.fps = fast ? 120.0 : 60.0; info->timing.sample_rate = 44100.0;
 }
 
 bool retro_load_game(const struct retro_game_info *game) {
@@ -73,6 +75,7 @@ bool retro_load_game(const struct retro_game_info *game) {
     bitmasks = env_cb(RETRO_ENVIRONMENT_GET_INPUT_BITMASKS, NULL);
     if (!game || !game->data || game->size < 1) return false;
     if (game->size >= 3 && memcmp(game->data, "BAD", 3) == 0) return false;
+    fast = game->size >= 4 && memcmp(game->data, "FAST", 4) == 0;
     uint8_t b = ((const uint8_t *)game->data)[0];
     tint = ((uint32_t)(b * 37 & 0x7F) << 16) | ((uint32_t)(b * 91 & 0x7F) << 8) | (b * 53 & 0x7F);
     return true;

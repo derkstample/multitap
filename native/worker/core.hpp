@@ -1,4 +1,4 @@
-// A libretro core wrapper (one core per process), ported from multitap/libretro/core.py.
+// A libretro core wrapper (one core per process).
 // OpenGL cores render into an offscreen EGL context (hwrender.hpp); their frames reach the video
 // hook as XRGB8888 like any software frame.
 #pragma once
@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -73,8 +74,13 @@ class Core {
   // Set by the owner before each run(); read from the input_state callback.
   uint32_t input_bits = 0;
   int32_t analog[4] = {0, 0, 0, 0};  // left x, left y, right x, right y
-  // Interleaved int16 stereo produced during the last run(); the owner drains it.
-  std::vector<int16_t> audio;
+  // Move the interleaved int16 stereo produced since the last call into `out` (replacing its
+  // contents). Some cores (Dolphin) push audio from their own threads.
+  void take_audio(std::vector<int16_t> &out) {
+    std::lock_guard lock(audio_mutex_);
+    out.swap(audio_);
+    audio_.clear();
+  }
 
   // Frame time callback (RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK), if the core set one.
   bool has_frame_time_cb() const { return frame_time_.callback != nullptr; }
@@ -103,6 +109,8 @@ class Core {
 
   Api *api_;
   std::unique_ptr<HwRender> hw_;
+  std::mutex audio_mutex_;
+  std::vector<int16_t> audio_;
   SystemInfo info_;
   Hooks hooks_;
   retro_system_av_info av_{};

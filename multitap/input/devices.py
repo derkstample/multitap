@@ -7,7 +7,6 @@ import os
 import threading
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -84,13 +83,10 @@ class _SdlThread(QThread):
         while self.running:
             if not sdl2.SDL_WaitEventTimeout(ctypes.byref(ev), 50):
                 continue
-            changed: set[str] = set()
             while True:
-                m._handle(ev, changed)
+                m._handle(ev)
                 if not sdl2.SDL_PollEvent(ctypes.byref(ev)):
                     break
-            for key in changed:
-                m._notify(key)
         with m._lock:
             for pad in m._pads.values():
                 sdl2.SDL_GameControllerClose(pad.handle)
@@ -109,7 +105,6 @@ class GamepadManager(QObject):
         self._lock = threading.Lock()
         self._pads: dict[int, Pad] = {}  # by SDL instance id
         self._unmapped: dict[int, str] = {}  # joysticks SDL has no controller mapping for
-        self._listeners: list[Callable[[str, set[str], dict[str, int]], None]] = []
         self.error = ""
         self._thread = _SdlThread(self)
 
@@ -140,29 +135,8 @@ class GamepadManager(QObject):
                     return set(p.buttons), dict(p.axes)
         return set(), {}
 
-    def add_listener(self, fn: Callable[[str, set[str], dict[str, int]], None]) -> None:
-        """fn(key, buttons, axes) is called on the SDL thread whenever a pad's state changes."""
-        with self._lock:
-            self._listeners.append(fn)
-
-    def remove_listener(self, fn) -> None:
-        with self._lock:
-            if fn in self._listeners:
-                self._listeners.remove(fn)
-
     # ---- SDL thread internals ---------------------------------------------
-    def _notify(self, key: str) -> None:
-        with self._lock:
-            listeners = list(self._listeners)
-            pad = next((p for p in self._pads.values() if p.key == key), None)
-            snap = (set(pad.buttons), dict(pad.axes)) if pad else (set(), {})
-        for fn in listeners:
-            try:
-                fn(key, *snap)
-            except Exception:
-                pass
-
-    def _handle(self, ev, changed: set[str]) -> None:
+    def _handle(self, ev) -> None:
         t = ev.type
         if t == sdl2.SDL_CONTROLLERDEVICEADDED:
             self._open(ev.cdevice.which)
@@ -171,7 +145,6 @@ class GamepadManager(QObject):
                 pad = self._pads.pop(ev.cdevice.which, None)
             if pad:
                 sdl2.SDL_GameControllerClose(pad.handle)
-                changed.add(pad.key)
                 self.devicesChanged.emit()
         elif t == sdl2.SDL_JOYDEVICEADDED:
             idx = ev.jdevice.which
@@ -199,7 +172,6 @@ class GamepadManager(QObject):
                 else:
                     pad.buttons.discard(name)
                 key = pad.key
-            changed.add(key)
             if t == sdl2.SDL_CONTROLLERBUTTONDOWN:
                 self.activity.emit(key, f"button:{name}")
         elif t == sdl2.SDL_CONTROLLERAXISMOTION:
@@ -215,7 +187,6 @@ class GamepadManager(QObject):
                 new = ev.caxis.value
                 pad.axes[name] = new
                 key = pad.key
-            changed.add(key)
             for sign, crossed in (("+", old <= AXIS_THRESHOLD < new),
                                   ("-", old >= -AXIS_THRESHOLD > new)):
                 if crossed:

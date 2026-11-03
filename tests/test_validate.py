@@ -1,6 +1,6 @@
 import zipfile
 
-from multitap.roms.validate import GB_LOGO, prepare_content, quick_check
+from multitap.roms.validate import GB_LOGO, quick_check
 
 
 def nes_rom():
@@ -39,16 +39,12 @@ def test_gb_and_gba_headers(tmp_path):
     assert quick_check(tmp_path / "c.gba", ["gba"]).ok
 
 
-def test_zip_contents_are_checked_and_extracted(tmp_path):
+def test_zip_contents_are_checked(tmp_path):
     z = tmp_path / "game.zip"
     with zipfile.ZipFile(z, "w") as zf:
         zf.writestr("readme.txt", "x")
         zf.writestr("game.nes", nes_rom())
     assert quick_check(z, ["nes"]).ok
-    out = prepare_content(z, ["nes"], tmp_path)
-    assert out.name == "game.nes" and out.read_bytes()[:4] == b"NES\x1a"
-    # a core that handles zips itself gets the archive untouched
-    assert prepare_content(z, ["nes", "zip"], tmp_path) == z
 
     empty = tmp_path / "empty.zip"
     with zipfile.ZipFile(empty, "w") as zf:

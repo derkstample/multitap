@@ -1,4 +1,4 @@
-"""The C++ multitap-worker, driven through tests/native_harness.py (mirrors test_worker.py)."""
+"""The C++ multitap-worker, driven through tests/native_harness.py."""
 
 import json
 import struct
@@ -10,7 +10,6 @@ import zipfile
 import pytest
 
 from multitap import native
-from multitap.cores.probe import probe_argv, probe_env, python_probe_argv
 
 from native_harness import (STATE_PAUSED, STATE_RUNNING, NativeWorker, stop_all, wait_for)
 
@@ -108,6 +107,24 @@ def test_synchronized_start(testcore, content, tmp_path):
         stop_all(workers)
 
 
+def test_a_wrong_frame_rate_is_paced_by_audio(testcore, tmp_path):
+    rom = tmp_path / "fast.tst"
+    rom.write_bytes(b"FAST")  # reports 120 fps, makes 735 samples (1/60 s) per frame
+    w = spawn(0, testcore, rom, tmp_path)
+    try:
+        assert w.wait_loaded()
+        assert w.info["fps"] == 120.0
+        w.start()
+        assert wait_for(lambda: (w.poll(), any("pacing by its audio" in l for l in w.logs))[1],
+                        timeout=6), w.logs
+        w.stats.clear()
+        assert wait_for(lambda: (w.poll(), len(w.stats) >= 2)[1], timeout=4)
+        assert 55 < w.stats[-1]["fps"] < 65
+        assert w.video.header()["core_fps"] == 60.0  # snapped to half the reported rate
+    finally:
+        w.stop()
+
+
 def test_short_tap_is_latched_for_one_frame(testcore, content, tmp_path):
     w = spawn(0, testcore, content, tmp_path, audible=True)
     try:
@@ -129,7 +146,7 @@ def test_short_tap_is_latched_for_one_frame(testcore, content, tmp_path):
         w.stop()
 
 
-# ---- probe parity with multitap/cores/probe.py ------------------------------------------
+# ---- probes --------------------------------------------------------------------------
 
 def last_json(argv, env=None) -> dict:
     res = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=10)
@@ -137,50 +154,45 @@ def last_json(argv, env=None) -> dict:
     return json.loads(lines[-1])
 
 
-def both_probes(*args):
-    return (last_json([str(WORKER), "--probe", *args]),
-            last_json(python_probe_argv(*args), env=probe_env()))
+def probe(*args):
+    return last_json([str(WORKER), "--probe", *args])
 
 
-def test_probe_info_parity(testcore, tmp_path):
-    native_info, python_info = both_probes("info", str(testcore))
-    assert native_info == python_info
-    assert native_info["valid_extensions"] == ["tst"]
+def test_probe_info(testcore, tmp_path):
+    assert probe("info", str(testcore)) == {
+        "library_name": "MultiTap Test Core", "library_version": "1.0",
+        "valid_extensions": ["tst"], "need_fullpath": False, "block_extract": False}
 
     not_a_core = tmp_path / "x_libretro.so"
     not_a_core.write_text("nope")
-    native_info, python_info = both_probes("info", str(not_a_core))
-    assert native_info == python_info
-    assert native_info["error"].startswith("Cannot load core:")
+    assert probe("info", str(not_a_core))["error"].startswith("Cannot load core:")
 
 
-def test_probe_trial_parity(testcore, content, tmp_path):
+def test_probe_trial(testcore, content, tmp_path):
     system = str(tmp_path / "system")
-    native_res, python_res = both_probes("trial", str(testcore), str(content), system)
-    assert native_res == python_res
-    assert native_res["ok"] and native_res["frames"] == 10
+    res = probe("trial", str(testcore), str(content), system)
+    assert res == {"ok": True, "name": "MultiTap Test Core", "fps": 60.0,
+                   "aspect": pytest.approx(4 / 3), "frames": 10}
 
     bad = tmp_path / "bad.tst"
     bad.write_bytes(b"BAD")
-    native_res, python_res = both_probes("trial", str(testcore), str(bad), system)
-    assert native_res == python_res == {"ok": False, "error": "The core rejected this file"}
+    assert probe("trial", str(testcore), str(bad), system) == {
+        "ok": False, "error": "The core rejected this file"}
 
 
-def test_probe_trial_zip_parity(testcore, tmp_path):
+def test_probe_trial_extracts_zips(testcore, tmp_path):
     system = str(tmp_path / "system")
     good = tmp_path / "game.zip"
     with zipfile.ZipFile(good, "w") as zf:
         zf.writestr("readme.txt", "hi")
         zf.writestr("roms/game.tst", b"Z")
-    native_res, python_res = both_probes("trial", str(testcore), str(good), system)
-    assert native_res == python_res and native_res["ok"]
+    assert probe("trial", str(testcore), str(good), system)["ok"]
 
     empty = tmp_path / "empty.zip"
     with zipfile.ZipFile(empty, "w") as zf:
         zf.writestr("readme.txt", "hi")
-    native_res, python_res = both_probes("trial", str(testcore), str(empty), system)
-    assert native_res == python_res
-    assert native_res["error"] == "Archive contains no file this core can load"
+    res = probe("trial", str(testcore), str(empty), system)
+    assert res == {"ok": False, "error": "Archive contains no file this core can load"}
 
 
 def test_native_report_lists_worker():
@@ -213,8 +225,7 @@ def test_opengl_core_frames_reach_shared_memory(testcore_gl, content, tmp_path):
 
 
 def test_probe_trial_runs_an_opengl_core(testcore_gl, content, tmp_path):
-    res = last_json([str(WORKER), "--probe", "trial", str(testcore_gl), str(content),
-                     str(tmp_path / "system")])
+    res = probe("trial", str(testcore_gl), str(content), str(tmp_path / "system"))
     if not res["ok"] and "OpenGL" in res.get("error", ""):
         pytest.skip(res["error"])
     assert res["ok"] and res["frames"] == 10 and res["name"] == "MultiTap GL Test Core"

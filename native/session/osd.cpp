@@ -233,7 +233,9 @@ void Overlay::diagnostics(const OsdView &v, const TileView &t, float label_size)
   }
   bool graph = v.cfg.frame_time && !f.intervals_ms.empty();
   if (v.cfg.frame_time) {
-    std::snprintf(buf, sizeof buf, "Frame %.2f ms", p.frame_ms);
+    // Frame interval from the measured rate; emulation is the core's own share of it.
+    double interval = p.measured_fps > 0 ? 1000.0 / p.measured_fps : 0.0;
+    std::snprintf(buf, sizeof buf, "Frame %.1f ms · emu %.1f ms", interval, p.frame_ms);
     lines.emplace_back(buf, text);
   }
   if (v.cfg.audio) {

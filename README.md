@@ -36,9 +36,16 @@ Cores are found automatically in:
 - MultiTap's own folder, which **Get cores…** downloads into from buildbot.libretro.com
 
 **Browse…** adds any `*_libretro.so` from disk. Software-rendered cores (NES, SNES, Mega Drive,
-GB/GBC/GBA, PC Engine, …) and OpenGL / OpenGL ES cores (N64, Dreamcast, PSP, …) both work: each
-player's GL core renders offscreen on the GPU through EGL. Cores that only support Vulkan or
-Direct3D are listed but greyed out.
+GB/GBC/GBA, PC Engine, …) and OpenGL / OpenGL ES cores (N64, Dreamcast, PlayStation, DS,
+GameCube / Wii, …) both work: each player's GL core renders offscreen on the GPU through EGL.
+Cores that only support Vulkan or Direct3D are listed but greyed out. PPSSPP doesn't work yet (its
+GLEW needs a GLX context). **Get cores…** also installs Dolphin's system files into the BIOS
+folder.
+
+Some cores get option values that suit a frontend that paces them by frame rate rather than by
+blocking on audio (`native/worker/core.cpp`, `kFrontendDefaults`): Flycast runs unthreaded with
+vblank pacing, and ParaLLEl N64 uses Glide64. A core whose audio shows its reported frame rate is
+wrong (Dolphin reports twice its field rate) is paced by its audio instead.
 
 ## Launcher
 
@@ -97,9 +104,9 @@ go in `~/.local/share/multitap/system/`, or point **BIOS folder…** elsewhere.
 .venv/bin/python -m pytest
 ```
 
-`tests/fixtures/testcore.c` is a tiny libretro core that the tests build with gcc. It drives the
-worker, probe and SRAM tests without needing any ROMs. `tests/test_native_worker.py` runs the same
-checks against the C++ `multitap-worker`, and `tests/test_native_session.py` runs
+`tests/fixtures/testcore.c` and `testcore_gl.c` are tiny libretro cores that the tests build with
+gcc, so no ROMs are needed. `tests/test_native_worker.py` drives `multitap-worker` (probes, SRAM,
+input, synchronized start, OpenGL rendering) and `tests/test_native_session.py` runs
 `multitap-session` headless (SDL's offscreen driver) and checks its screenshots. Both skip when
 the binaries aren't built.
 
@@ -112,11 +119,10 @@ with ctest from the build folder that `pip install` used:
 
 ## Native runtime
 
-The game runtime is C++ (`native/`); the Python launcher stays. When a game starts, the launcher
+The game runtime is C++ (`native/`) and the launcher is Python (PySide6, with PySDL2 for listing
+controllers and audio devices). MultiTap needs the native binaries: without them the launcher
+opens but can't probe cores or start games. When a game starts, the launcher
 writes `$XDG_RUNTIME_DIR/multitap/session.json` and runs `multitap-session` (SDL2, OpenGL 3.3,
 Dear ImGui), which spawns one `multitap-worker` per player. Workers talk to the session through
 shared memory (`native/common/shm.hpp` documents the layout) and a JSON control socket
 (`native/worker/main.cpp`). Every worker loads paused and they all start on the same frame.
-
-`MULTITAP_PYTHON_SESSION=1` uses the older Python session instead (it is also used when
-`multitap-session` isn't built).

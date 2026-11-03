@@ -1,4 +1,4 @@
-// multitap-worker: runs one player's libretro core (port of multitap/worker/main.py).
+// multitap-worker: runs one player's libretro core.
 //
 //   multitap-worker --control-fd N --core CORE --rom ROM --system-dir DIR --save-dir DIR
 //                   [--slot N] [--shm-prefix NAME] [--username NAME] [--option KEY=VALUE]... [--audible]
@@ -47,6 +47,11 @@ constexpr double kSramIntervalS = 30.0;
 constexpr double kAudioTargetMs = 60.0;
 constexpr double kAudioAdjust = 0.005;  // max pacing correction while audible (0.5%)
 constexpr int64_t kResyncNs = 100'000'000;  // fell this far behind (suspend?): restart the clock
+// Audio pacing: when a core's audio per frame implies a frame rate this far from the one it
+// reports for kAudioRateWindows steady windows in a row, pace by the audio; go back once they
+// agree again. (Games' audio per frame wanders by 10-15% while booting; a wrong rate is way off.)
+constexpr double kAudioRateTrust = 0.25, kAudioRateAgree = 0.05, kAudioRateSteady = 0.03;
+constexpr int kAudioRateWindows = 3;
 
 volatile sig_atomic_t g_quit = 0;
 
@@ -212,7 +217,7 @@ class Worker {
     audio_->init(acap, core_->sample_rate());
     auto &hdr = video_->header();
     hdr.aspect = float(core_->aspect());
-    hdr.core_fps = core_->fps();
+    hdr.core_fps = pace_fps();
     hdr.sample_rate = core_->sample_rate();
     video_->set_state(mt::shm::kPaused);  // until `start`
   }
@@ -244,8 +249,10 @@ class Worker {
   void restart_clock(const json &msg) {
     t0_ = msg.contains("t0_ns") ? msg["t0_ns"].get<int64_t>() : now_ns();
     n_ = 0;
-    period_ns_ = 1e9 / core_->fps();
+    period_ns_ = 1e9 / pace_fps();
     last_frame_ns_ = 0;
+    rate_runs_ = 0;
+    rate_samples_ = 0;
     stats_t0_ = std::max(t0_, now_ns());  // paused or waiting time isn't frame time
     stats_frames_ = 0;
     run_ns_ = 0;
@@ -314,12 +321,13 @@ class Worker {
       n_++;
       if (core_->shutdown_requested()) break;
 
-      double fps = core_->fps();
-      if (double p = 1e9 / fps; std::abs(p - period_ns_) > 1) {  // the core changed its rate
+      core_->take_audio(samples_);
+      check_audio_rate();
+      if (double p = 1e9 / pace_fps(); std::abs(p - period_ns_) > 1) {  // the rate changed
         t0_ += int64_t(std::llround(n_ * period_ns_)) - int64_t(std::llround(n_ * p));
         period_ns_ = p;
       }
-      auto &samples = core_->audio;
+      auto &samples = samples_;
       if (audible_ && !samples.empty()) {
         audio_->write(samples.data(), samples.size() / 2);
         double queued_ms = audio_->fill() * 1000.0 / core_->sample_rate();
@@ -345,6 +353,51 @@ class Worker {
         sram_t0 = end;
       }
     }
+  }
+
+  double pace_fps() const { return audio_fps_ > 0 ? audio_fps_ : core_->fps(); }
+
+  // RetroArch paces cores by blocking on audio output, so there a core whose reported frame rate
+  // is wrong still runs at real speed (Dolphin reports twice its field rate; Flycast's threaded
+  // renderer runs as fast as it's driven). Here the frame clock comes from the reported rate, so
+  // check it against the audio the core makes per frame and pace by that when they disagree.
+  //
+  // Windows are about a second of frames counted from the shared start, and the measured rate is
+  // snapped to a simple ratio of the reported one, so players of the same game switch on the same
+  // frame to the same rate and stay in step.
+  void check_audio_rate() {
+    rate_runs_++;
+    rate_samples_ += samples_.size() / 2;
+    if (rate_runs_ < std::llround(core_->fps())) return;
+    if (rate_samples_ > 0 && core_->sample_rate() > 0) {
+      double fps = core_->sample_rate() * rate_runs_ / double(rate_samples_);
+      for (double r : {0.25, 1.0 / 3, 0.5, 2.0 / 3, 1.5, 2.0, 3.0, 4.0})
+        if (std::abs(fps / (core_->fps() * r) - 1.0) < 0.02) fps = core_->fps() * r;
+      double off = std::abs(fps / core_->fps() - 1.0);
+      bool steady = std::abs(fps / last_window_fps_ - 1.0) < kAudioRateSteady;
+      last_window_fps_ = fps;
+      if (!audio_fps_) {
+        rate_streak_ = off > kAudioRateTrust ? (steady ? rate_streak_ + 1 : 1) : 0;
+        if (rate_streak_ >= kAudioRateWindows) {
+          log("The core reports " + std::to_string(core_->fps()) + " fps but its audio runs at " +
+              std::to_string(fps) + " fps; pacing by its audio");
+          audio_fps_ = fps;
+          rate_streak_ = 0;
+        }
+      } else if (off < kAudioRateAgree) {
+        if (++rate_streak_ >= kAudioRateWindows) {
+          log("The core's audio matches its frame rate again");
+          audio_fps_ = 0;
+          rate_streak_ = 0;
+        }
+      } else {
+        rate_streak_ = 0;
+        if (steady) audio_fps_ = fps;
+      }
+      video_->header().core_fps = pace_fps();
+    }
+    rate_runs_ = 0;
+    rate_samples_ = 0;
   }
 
   void save_sram() {
@@ -390,6 +443,11 @@ class Worker {
   int64_t stats_t0_ = 0, run_ns_ = 0;
   int stats_frames_ = 0;
   double period_ns_ = 1e9 / 60;
+  std::vector<int16_t> samples_;  // audio from the last run
+  double audio_fps_ = 0;          // pacing by audio when set (see check_audio_rate)
+  int64_t rate_runs_ = 0, rate_samples_ = 0;
+  double last_window_fps_ = 1;
+  int rate_streak_ = 0;
 };
 
 int usage() {

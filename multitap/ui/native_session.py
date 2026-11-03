@@ -42,6 +42,7 @@ class NativeSession(QObject):
     def start(self) -> bool:
         binary = native.find(BINARY)
         if binary is None:
+            self.tail.append(f"{BINARY} isn't built: run pip install -e .")
             return False
         config = write_native_config(self.cfg, paths.ensure(paths.runtime_dir()) / "session.json",
                                      self.screen)

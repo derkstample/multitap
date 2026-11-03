@@ -1,5 +1,5 @@
-// The session config the launcher writes (multitap/session_config.py), plus the pure geometry
-// helpers ported from the Python session: tile rects and where a frame goes inside its tile.
+// The session config the launcher writes (multitap/session_config.py), plus the pure
+// geometry helpers: tile rects and where a frame goes inside its tile.
 #pragma once
 
 #include <nlohmann/json.hpp>
@@ -98,7 +98,7 @@ struct FRect {
 };
 
 // Where a frame goes in its tile: the source rows to show (x, y, w, h in frame pixels) and the
-// target rect relative to the tile (port of ui.session.frame_geometry).
+// target rect relative to the tile.
 struct Placement {
   IRect src;
   FRect dst;

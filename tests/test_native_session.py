@@ -143,7 +143,6 @@ def test_app_hides_the_launcher_while_the_native_session_runs(testcore, content,
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.delenv("MULTITAP_PYTHON_SESSION", raising=False)
     qapp = QApplication.instance() or QApplication([])
     app = App(qapp)
     try:

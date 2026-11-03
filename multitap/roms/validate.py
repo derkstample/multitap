@@ -37,21 +37,6 @@ def needs_extraction(path: str | Path, core_exts: list[str], block_extract: bool
     return ext in ARCHIVE_EXTS and ext not in core_exts and not block_extract
 
 
-def prepare_content(path: str | Path, core_exts: list[str], tmpdir: str | Path,
-                    block_extract: bool = False) -> Path:
-    """Return the file to hand to the core, extracting from an archive when the core can't."""
-    path = Path(path)
-    if not needs_extraction(path, core_exts, block_extract):
-        return path
-    members = archive_members(path, core_exts)
-    if not members:
-        raise ValueError("Archive contains no file this core can load")
-    with zipfile.ZipFile(path) as zf:
-        target = Path(tmpdir) / Path(members[0]).name
-        target.write_bytes(zf.read(members[0]))
-    return target
-
-
 def _read_head(path: Path, size: int = 0x200) -> bytes:
     with open(path, "rb") as fh:
         return fh.read(size)

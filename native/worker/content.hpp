@@ -1,4 +1,4 @@
-// Content handling ported from multitap/roms/validate.py.
+// Content handling: ROM loading and zip extraction.
 #pragma once
 
 #include <stdexcept>
@@ -18,7 +18,7 @@ std::string ext_of(const std::string &path);
 std::string stem_of(const std::string &path);
 
 // The file to hand to the core: `path` itself, or its first loadable member extracted into
-// `tmpdir` when it is a zip the core can't open itself (prepare_content).
+// `tmpdir` when it is a zip the core can't open itself.
 std::string prepare_content(const std::string &path, const std::vector<std::string> &core_exts,
                             const std::string &tmpdir, bool block_extract);
 

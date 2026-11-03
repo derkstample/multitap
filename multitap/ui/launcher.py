@@ -399,7 +399,7 @@ class LauncherWindow(QMainWindow):
         self.reload_cores(select=path)
 
     def _get_cores(self):
-        dlg = CoresDialog(self)
+        dlg = CoresDialog(str(self.s.effective_system_dir()), self)
         if dlg.exec() and dlg.downloaded:
             self.reload_cores(select=str(installed_path(dlg.downloaded[0])))
 
@@ -487,13 +487,17 @@ class LauncherWindow(QMainWindow):
         if key in self._trial_cache:
             self._set_rom_state(*self._trial_cache[key])
             return
+        try:
+            argv = probe_argv("trial", core.path, rom, str(self.s.effective_system_dir()))
+        except FileNotFoundError:
+            self._set_rom_state("bad", "MultiTap's native runtime isn't built: run pip install -e .")
+            return
         self._set_rom_state("checking", "Checking that the game loads…")
         proc = QProcess(self)
         qenv = QProcessEnvironment()
         for k, v in probe_env().items():
             qenv.insert(k, v)
         proc.setProcessEnvironment(qenv)
-        argv = probe_argv("trial", core.path, rom, str(self.s.effective_system_dir()))
         proc.finished.connect(lambda *_: self._trial_done(proc, key))
         QTimer.singleShot(TRIAL_TIMEOUT_MS, lambda: proc.state() != QProcess.NotRunning
                           and proc.kill())
@@ -758,6 +762,8 @@ class LauncherWindow(QMainWindow):
     # ---- start ----------------------------------------------------------------
     def _blocking_issues(self) -> list[str]:
         issues = []
+        if not native_session.available():
+            issues.append("MultiTap's native runtime isn't built (run pip install -e .)")
         core = self.current_core()
         if not core:
             issues.append("Choose an emulator core")

@@ -14,9 +14,10 @@ class _DownloadThread(QThread):
     finished_ok = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, names: list[str]):
+    def __init__(self, names: list[str], system_dir: str):
         super().__init__()
         self.names = names
+        self.system_dir = system_dir
 
     def run(self):
         done = []
@@ -25,6 +26,10 @@ class _DownloadThread(QThread):
             downloader.download_info(lambda d, t: self.progress.emit("Core info files", d, t))
             for name in self.names:
                 downloader.download_core(name, lambda d, t, n=name: self.progress.emit(n, d, t))
+                if name in downloader.SYSTEM_FILES:
+                    label = f"{name} system files"
+                    downloader.download_system_files(
+                        name, self.system_dir, lambda d, t, l=label: self.progress.emit(l, d, t))
                 done.append(name)
         except Exception as exc:
             self.failed.emit(f"{exc}")
@@ -33,8 +38,9 @@ class _DownloadThread(QThread):
 
 
 class CoresDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, system_dir: str, parent=None):
         super().__init__(parent)
+        self.system_dir = system_dir
         self.setWindowTitle("Get cores")
         self.setMinimumSize(520, 460)
         self.downloaded: list[str] = []
@@ -44,13 +50,8 @@ class CoresDialog(QDialog):
         intro.setWordWrap(True)
         root.addWidget(intro)
         self.list = QListWidget()
-        for name, label, systems in downloader.CURATED:
-            installed = downloader.installed_path(name).is_file()
-            item = QListWidgetItem(f"{label} — {systems}" + ("   (installed)" if installed else ""))
-            item.setData(Qt.UserRole, name)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            self.list.addItem(item)
+        self._add_section("2D (software-rendered)", downloader.CURATED)
+        self._add_section("3D (OpenGL, rendered on the GPU)", downloader.CURATED_GL)
         root.addWidget(self.list)
         self.status = QLabel()
         root.addWidget(self.status)
@@ -64,9 +65,25 @@ class CoresDialog(QDialog):
         root.addWidget(self.buttons)
         self._thread: _DownloadThread | None = None
 
+    def _add_section(self, title: str, cores: list[tuple[str, str, str]]) -> None:
+        header = QListWidgetItem(title)
+        header.setFlags(Qt.NoItemFlags)
+        font = header.font()
+        font.setBold(True)
+        header.setFont(font)
+        self.list.addItem(header)
+        for name, label, systems in cores:
+            installed = downloader.installed_path(name).is_file()
+            item = QListWidgetItem(f"{label} — {systems}" + ("   (installed)" if installed else ""))
+            item.setData(Qt.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.list.addItem(item)
+
     def _checked(self) -> list[str]:
         return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
-                if self.list.item(i).checkState() == Qt.Checked]
+                if self.list.item(i).data(Qt.UserRole)
+                and self.list.item(i).checkState() == Qt.Checked]
 
     def _start(self):
         names = self._checked()
@@ -76,7 +93,7 @@ class CoresDialog(QDialog):
         self.get.setEnabled(False)
         self.list.setEnabled(False)
         self.bar.show()
-        self._thread = _DownloadThread(names)
+        self._thread = _DownloadThread(names, self.system_dir)
         self._thread.progress.connect(self._on_progress)
         self._thread.finished_ok.connect(self._on_done)
         self._thread.failed.connect(self._on_failed)

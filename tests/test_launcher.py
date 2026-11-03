@@ -197,3 +197,44 @@ def test_config_dialogs_return_edited_copies(qapp):
     dlg.rotation.setValue(30)
     out = dlg.result_settings()
     assert (out.volume, out.rotation_s, out.device) == (40, 30, "Gone Speakers")
+
+
+def test_get_cores_lists_opengl_cores(qapp, xdg, tmp_path):
+    from multitap.cores import downloader
+    from multitap.ui.cores_dialog import CoresDialog
+
+    dlg = CoresDialog(str(tmp_path / "system"))
+    items = [dlg.list.item(i) for i in range(dlg.list.count())]
+    names = [it.data(Qt.UserRole) for it in items if it.data(Qt.UserRole)]
+    assert names == [n for n, _, _ in downloader.CURATED + downloader.CURATED_GL]
+    assert "mupen64plus_next" in names and "flycast" in names
+    headers = [it.text() for it in items if not it.data(Qt.UserRole)]
+    assert headers == ["2D (software-rendered)", "3D (OpenGL, rendered on the GPU)"]
+    assert all(not (it.flags() & Qt.ItemIsUserCheckable) for it in items if not it.data(Qt.UserRole))
+
+    for it in items:
+        if it.data(Qt.UserRole) in ("snes9x", "flycast"):
+            it.setCheckState(Qt.Checked)
+    assert dlg._checked() == ["snes9x", "flycast"]
+    dlg.deleteLater()
+
+
+def test_system_files_unpack_into_the_system_folder(tmp_path, monkeypatch):
+    import io
+    import zipfile
+
+    from multitap.cores import downloader
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("dolphin-emu/Sys/GC/font.bin", b"F")
+        zf.writestr("../escape.txt", b"no")
+    urls = []
+    monkeypatch.setattr(downloader, "_fetch", lambda url, progress=None: urls.append(url) or buf.getvalue())
+
+    system = tmp_path / "system"
+    assert downloader.download_system_files("dolphin", system) == 1
+    assert urls == ["https://buildbot.libretro.com/assets/system/Dolphin.zip"]
+    assert (system / "dolphin-emu/Sys/GC/font.bin").read_bytes() == b"F"
+    assert not (tmp_path / "escape.txt").exists()
+    assert downloader.download_system_files("fceumm", system) == 0

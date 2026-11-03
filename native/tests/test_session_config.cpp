@@ -8,7 +8,7 @@
 using namespace mt::session;
 using nlohmann::json;
 
-TEST_CASE("frame_geometry matches the Python session") {
+TEST_CASE("frame_geometry") {
   Graphics g;
   // NES 256x240 at 4:3 in a 1000x600 tile: height-limited, centred.
   Placement p = frame_geometry(1000, 600, 256, 240, 4.0 / 3, g);

@@ -18,6 +18,19 @@ Core *g_core = nullptr;
 
 constexpr unsigned kEnvCmdMask = 0xFFFF;  // drop the EXPERIMENTAL/PRIVATE flags
 
+// Option values some cores need under MultiTap, which paces retro_run by the core's frame rate
+// instead of blocking on audio. Used when the core offers the value; --option still wins.
+const std::map<std::string, std::string> kFrontendDefaults = {
+    // Flycast: the threaded renderer free-runs the emulator between runs (games run fast);
+    // without it, vblank pacing makes every run exactly one vblank.
+    {"reicast_threaded_rendering", "disabled"},
+    {"reicast_vblank_pacing", "enabled"},
+    // ParaLLEl N64: its GLideN64 draws garbage once a game's save is loaded (SM64's title
+    // screen with any EEPROM save); Glide64, what its own "auto" picks under OpenGL, is fine.
+    // Mupen64Plus-Next is the core for GLideN64.
+    {"parallel-n64-gfxplugin", "glide64"},
+};
+
 std::string dl_error() {
   const char *e = dlerror();
   return e ? e : "unknown error";
@@ -211,12 +224,15 @@ void Core::video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
 }
 
 void Core::audio_sample_cb(int16_t l, int16_t r) {
-  g_core->audio.push_back(l);
-  g_core->audio.push_back(r);
+  std::lock_guard lock(g_core->audio_mutex_);
+  g_core->audio_.push_back(l);
+  g_core->audio_.push_back(r);
 }
 
 size_t Core::audio_batch_cb(const int16_t *data, size_t frames) {
-  if (frames) g_core->audio.insert(g_core->audio.end(), data, data + frames * 2);
+  if (!frames) return frames;
+  std::lock_guard lock(g_core->audio_mutex_);
+  g_core->audio_.insert(g_core->audio_.end(), data, data + frames * 2);
   return frames;
 }
 
@@ -431,9 +447,13 @@ void Core::define_options(const Def *defs) {
 void Core::define_option(const std::string &key, const std::vector<std::string> &values,
                          const char *default_value) {
   std::string value = default_value ? default_value : (values.empty() ? "" : values.front());
-  if (auto it = overrides_.find(key); it != overrides_.end() &&
-      std::find(values.begin(), values.end(), it->second) != values.end())
+  auto offered = [&](const std::string &v) {
+    return std::find(values.begin(), values.end(), v) != values.end();
+  };
+  if (auto it = overrides_.find(key); it != overrides_.end() && offered(it->second))
     value = it->second;
+  else if (auto d = kFrontendDefaults.find(key); d != kFrontendDefaults.end() && offered(d->second))
+    value = d->second;
   set_option(key, value);
 }
 

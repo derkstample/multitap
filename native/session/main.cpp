@@ -15,6 +15,7 @@
 // Exit status: 0 back to the launcher, 3 quit MultiTap, 1 could not start, 2 bad arguments.
 #include <SDL.h>
 #include <signal.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cmath>
@@ -155,6 +156,8 @@ class Session {
     } else {
       SDL_GL_SetSwapInterval(0);
     }
+    SDL_DisplayMode mode{};
+    if (SDL_GetWindowDisplayMode(window_, &mode) == 0) refresh_hz_ = mode.refresh_rate;
     SDL_ShowCursor(SDL_DISABLE);
     SDL_GL_GetDrawableSize(window_, &width_, &height_);
     renderer_ = std::make_unique<Renderer>(cfg_.graphics, players_.size());
@@ -422,13 +425,29 @@ class Session {
         begin_quit();
       }
     }
+    if (present_period_ns_) {
+      timespec until{};
+      int64_t t = last_present_ns_ + present_period_ns_;
+      until.tv_sec = t / kSecond;
+      until.tv_nsec = t % kSecond;
+      clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &until, nullptr);
+    }
     SDL_GL_SwapWindow(window_);
+    last_present_ns_ = mt::session::now_ns();
 
     swaps_++;
     if (now - fps_t0_ >= kSecond) {
       display_fps_ = swaps_ * double(kSecond) / double(now - fps_t0_);
       swaps_ = 0;
       fps_t0_ = now;
+      // Some drivers and compositors return from a vsynced swap without waiting (seen: twice
+      // the refresh rate). Then pace presents to the display's refresh ourselves.
+      if (cfg_.graphics.vsync && !present_period_ns_ && refresh_hz_ > 0 &&
+          display_fps_ > refresh_hz_ * 1.25) {
+        present_period_ns_ = kSecond / refresh_hz_;
+        log("Swaps don't wait for vsync (" + std::to_string(int(display_fps_)) + " Hz on a " +
+            std::to_string(refresh_hz_) + " Hz display); pacing presents to the display");
+      }
     }
     // Without vsync (or with a hidden window) swapping doesn't wait: don't spin.
     if (!fresh && mt::session::now_ns() - now < 2'000'000) SDL_Delay(1);
@@ -464,6 +483,8 @@ class Session {
   int swaps_ = 0;
   int64_t fps_t0_ = 0;
   double display_fps_ = 0;
+  int refresh_hz_ = 0;  // 0 when SDL doesn't know
+  int64_t present_period_ns_ = 0, last_present_ns_ = 0;  // set once swaps prove not to wait
 };
 
 int usage() {

@@ -20,7 +20,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
-# Zip extraction for cores that can't open archives themselves (roms/validate.prepare_content).
+# Zip extraction for cores that can't open archives themselves.
 pkg_check_modules(LIBARCHIVE REQUIRED IMPORTED_TARGET libarchive)
 
 add_library(libretro_api INTERFACE)
